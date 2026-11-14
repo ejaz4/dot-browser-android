@@ -23,8 +23,6 @@ class BrowserDelegates {
                 if (area == "main") {
                     val activity: Activity = (context as Activity)
                     val contextualIdIcon = activity.findViewById<ImageView>(R.id.contextIdentityIcon)
-                    val deeplinkContextualIdIcon = activity.findViewById<ImageView>(R.id.deeplinkContextIdentityIcon)
-
 
                     if (securityInfo.isSecure) {
                         contextualIdIcon.setImageDrawable(ContextCompat.getDrawable(activity, R.drawable.ic_secure_filled))
@@ -49,10 +47,17 @@ class BrowserDelegates {
 
     public fun createNavigationDelegate(area: String, context: Context, applicationCtx: Context): GeckoSession.NavigationDelegate {
         return object : GeckoSession.NavigationDelegate {
-            var canGoBack = false
 
-            override fun onLocationChange(session: GeckoSession, url: String?) {
-                super.onLocationChange(session, url)
+            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
+                (context as? BrowserActivity)?.canGoBack = canGoBack
+            }
+
+            override fun onLocationChange(
+                session: GeckoSession,
+                url: String?,
+                perms: List<GeckoSession.PermissionDelegate.ContentPermission>,
+                hasUserGesture: Boolean
+            ) {
                 StorageManager().set(
                     applicationCtx,
                     "currentUri",
@@ -61,21 +66,15 @@ class BrowserDelegates {
                 )
 
                 val uri: Uri = url.toString().toUri();
-                var host = uri.host.toString();
-
-                if (host.startsWith("www.")) {
-                    host = host.replace("www.", "")
-                }
+                val host = uri.host.toString().removePrefix("www.")
 
                 val path = url.toString().replace("${uri.scheme}://${uri.host}", "");
 
                 if (area == "main") {
                     val activity: Activity = (context as Activity)
 
-                    activity.findViewById<TextView>(R.id.addressBarDomain).text =
-                        host.toString();
-                    activity.findViewById<TextView>(R.id.deeplinkAddressBarDomain).text =
-                        host.toString();
+                    activity.findViewById<TextView>(R.id.addressBarDomain).text = host
+                    activity.findViewById<TextView>(R.id.deeplinkAddressBarDomain).text = host
 
                     if (path != "/") activity.findViewById<TextView>(R.id.addressBarPath).text = path
                     if (path == "/") activity.findViewById<TextView>(R.id.addressBarPath).text = ""
@@ -95,7 +94,6 @@ class BrowserDelegates {
                 contextualIdIcon.setImageDrawable(ContextCompat.getDrawable(activity, R.drawable.ic_globe))
                 return (GeckoResult.allow())
             }
-
-            }
         }
     }
+}

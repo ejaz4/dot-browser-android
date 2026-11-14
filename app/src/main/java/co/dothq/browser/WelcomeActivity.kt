@@ -25,7 +25,7 @@ class WelcomeActivity : AppCompatActivity() {
             defaultProfile().applyDefaultPreferences(applicationContext);
             StorageManager().set(applicationContext, "setup", true, "appValues");
             val browserIntent = Intent(this, BrowserActivity::class.java);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            browserIntent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
             startActivity(browserIntent)
             overridePendingTransition(0, 0);
             this.finish()

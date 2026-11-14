@@ -1,64 +1,65 @@
 plugins {
     id 'com.android.application'
-    id 'kotlin-android'
 }
 
 android {
-    compileSdk 32
+    namespace = "co.dothq.browser"
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
 
     defaultConfig {
-        applicationId "co.dothq.browser"
-        minSdk 21
-        targetSdk 32
-        versionCode 1
-        versionName "1.0"
+        applicationId = "co.dothq.browser"
+        // GeckoView now requires Android 8.0 (API 26) or newer.
+        minSdk = 26
+        // Kept at 32 so runtime behaviour is unchanged (35+ forces edge-to-edge, etc.).
+        targetSdk = 32
+        versionCode = 1
+        versionName = "1.0"
 
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
 
     buildTypes {
         release {
-            minifyEnabled true
+            minifyEnabled = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        // Kotlin's jvmTarget follows this automatically with built-in Kotlin.
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = '1.8'
+
+    packaging {
+        // Replaces android:extractNativeLibs="true" from the manifest.
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
+
     sourceSets {
         main {
-            assets {
-                srcDirs 'src\\main\\assets', 'src\\main\\java\\co\\dothq\\browser\\config', 'src\\main\\java\\co\\dothq\\browser\\extensions\\search'
-            }
+            // Forward slashes so this also works on Linux/macOS (CI).
+            assets.srcDir 'src/main/java/co/dothq/browser/config'
         }
     }
 }
 
 dependencies {
-    def lifecycle_version = "2.2.0"
-    def ff_version = "95.0"
-    def gecko_version = "$ff_version.20211218203254"
+    def gecko_version = "160.0.20261104181552"
 
-
-    implementation "androidx.lifecycle:lifecycle-livedata-ktx:$lifecycle_version"
-    implementation "androidx.lifecycle:lifecycle-viewmodel-ktx:$lifecycle_version"
-
-    // Kotlin
-    implementation("androidx.fragment:fragment-ktx:1.4.0")
-    // Testing Fragments in Isolation
-    debugImplementation("androidx.fragment:fragment-testing:1.4.0")
-    implementation 'androidx.appcompat:appcompat:1.4.0'
-    implementation 'com.google.android.material:material:1.4.0'
-    implementation 'androidx.constraintlayout:constraintlayout:2.1.2'
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.2.1'
+    implementation 'androidx.recyclerview:recyclerview:1.4.0'
     implementation "org.mozilla.geckoview:geckoview:$gecko_version"
-    implementation "org.mozilla.components:browser-icons:$ff_version.0"
-    implementation 'androidx.legacy:legacy-support-v4:1.0.0'
-    testImplementation 'junit:junit:4.+'
+    testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.3'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.4.0'
 }

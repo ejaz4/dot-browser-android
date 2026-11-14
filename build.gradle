@@ -3,27 +3,18 @@ buildscript {
     repositories {
         google()
         mavenCentral()
-        maven {
-            url "https://nightly.maven.mozilla.org/maven2"
-        }
     }
     dependencies {
-        classpath "com.android.tools.build:gradle:7.0.4"
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.6.10"
-
-        // NOTE: Do not place your application dependencies here; they belong
-        // in the individual module build.gradle files
+        // AGP compiles Kotlin itself ("built-in Kotlin"), but bundles an older Kotlin compiler.
+        // GeckoView 160 is built with Kotlin 2.4, so bump the Kotlin Gradle plugin to match.
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.21"
     }
 }
 
-task clean(type: Delete) {
-    delete rootProject.buildDir
+plugins {
+    id 'com.android.application' version '9.3.3' apply false
 }
 
-allprojects {
-    repositories {
-        maven {
-            url "https://nightly.maven.mozilla.org/maven2"
-        }
-    }
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
 }
