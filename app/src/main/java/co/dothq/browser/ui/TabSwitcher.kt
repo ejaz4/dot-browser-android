@@ -236,6 +236,7 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
         adapter = a
         recycler = rv
         content.addView(rv, flp(MATCH, MATCH))
+        addEdgeFades(content, rv, p.frame, size = 36.dp)
         attachTouch(rv)
 
         val e = emptyState(c)

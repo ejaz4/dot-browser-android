@@ -251,6 +251,51 @@ fun FrameLayout.LayoutParams.margins(l: Int = 0, t: Int = 0, r: Int = 0, b: Int 
 
 fun Drawable?.orTransparent(): Drawable = this ?: ColorDrawable(Color.TRANSPARENT)
 
+/* ---- Scroll edges ---------------------------------------------------------------------------- */
+
+/**
+ * Soft gradient fades at a scroller's top and bottom edges, in the colour of whatever it sits on.
+ * Each appears only when there's more to scroll in that direction, so lists hint at their depth
+ * instead of being cut off.
+ */
+fun addEdgeFades(
+    container: FrameLayout, scroller: View, color: Int,
+    topInset: Int = 0, bottomInset: Int = 0, size: Int = 32.dp, top: Boolean = true, bottom: Boolean = true,
+) {
+    fun fade(orientation: GradientDrawable.Orientation) = View(container.context).apply {
+        background = GradientDrawable(orientation, intArrayOf(color, withAlpha(color, 0.72f), withAlpha(color, 0f)))
+        alpha = 0f
+        isClickable = false
+        isFocusable = false
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+    val topFade = if (top) fade(GradientDrawable.Orientation.TOP_BOTTOM).also {
+        container.addView(it, FrameLayout.LayoutParams(MATCH, size, Gravity.TOP).apply { topMargin = topInset })
+    } else null
+    val bottomFade = if (bottom) fade(GradientDrawable.Orientation.BOTTOM_TOP).also {
+        container.addView(it, FrameLayout.LayoutParams(MATCH, size, Gravity.BOTTOM).apply { bottomMargin = bottomInset })
+    } else null
+    fun show(v: View?, on: Boolean) {
+        if (v == null) return
+        val target = if (on) 1f else 0f
+        if (v.tag == target) return
+        v.tag = target
+        v.animate().alpha(target).setDuration(Motion.NORMAL).setInterpolator(Motion.ease).start()
+    }
+    val update = {
+        show(topFade, scroller.canScrollVertically(-1))
+        show(bottomFade, scroller.canScrollVertically(1))
+    }
+    scroller.setOnScrollChangeListener { _, _, _, _, _ -> update() }
+    scroller.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> update() }
+    if (scroller is androidx.recyclerview.widget.RecyclerView) {
+        scroller.addOnScrollListener(object : androidx.recyclerview.widget.RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: androidx.recyclerview.widget.RecyclerView, dx: Int, dy: Int) = update()
+        })
+    }
+    scroller.post { update() }
+}
+
 /* ---- Feel ----------------------------------------------------------------------------------- */
 
 /**

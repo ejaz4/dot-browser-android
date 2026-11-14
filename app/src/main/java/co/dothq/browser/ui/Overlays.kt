@@ -107,6 +107,7 @@ class DotMenu(private val host: FrameLayout, private val p: Palette) {
             }
             clipToOutline = true
             addView(scroller, flp(MATCH, WRAP))
+            addEdgeFades(this, scroller, p.surface, size = 24.dp)
         }
         list.measure(
             View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),

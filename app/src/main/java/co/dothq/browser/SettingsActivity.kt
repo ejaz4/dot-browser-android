@@ -74,7 +74,10 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(16.dp, 0, 16.dp, 32.dp)
         }
         scroll.addView(list)
-        column.addView(scroll, lp(MATCH, 0, 1f))
+        val scrollFrame = FrameLayout(this)
+        scrollFrame.addView(scroll, flp(MATCH, MATCH))
+        co.dothq.browser.ui.addEdgeFades(scrollFrame, scroll, p.frame)
+        column.addView(scrollFrame, lp(MATCH, 0, 1f))
         setContentView(root)
         sheet = Sheet(root, p)
         toast = DotToast(root)

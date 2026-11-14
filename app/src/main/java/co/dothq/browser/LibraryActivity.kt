@@ -143,6 +143,7 @@ class LibraryActivity : AppCompatActivity() {
             clipToPadding = false
         }
         content.addView(recycler, flp(MATCH, MATCH))
+        co.dothq.browser.ui.addEdgeFades(content, recycler, p.bg)
         empty = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL

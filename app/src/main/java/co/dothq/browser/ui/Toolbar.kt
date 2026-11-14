@@ -572,6 +572,7 @@ class SuggestionsView(context: Context, private val p: Palette, reverse: Boolean
         list.clipToPadding = false
         list.adapter = Adapter()
         addView(list, flp(MATCH, MATCH))
+        addEdgeFades(this, list, p.bg, size = 28.dp)
     }
 
     private var firstSubmit = true
