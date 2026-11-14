@@ -258,7 +258,7 @@ class NewTabPage(context: Context, private val app: DotApp, private val cb: NewT
             icon.bindFavicon(Favicons.memoryCached(host), host)
             Favicons.get(c, host, allowNetwork = true) { bmp -> if (bmp != null) icon.bindFavicon(bmp, host) }
             tile.addView(box, lp(56.dp, 56.dp).margins(b = 8.dp))
-            val name = site.title.takeIf { it.isNotBlank() && it.length <= 14 } ?: prettyName(host)
+            val name = site.title.takeIf { it.isNotBlank() && it.length <= 12 && !it.contains(' ') } ?: prettyName(host)
             tile.addView(c.label(name, 12f, p.text2).apply {
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
@@ -269,13 +269,24 @@ class NewTabPage(context: Context, private val app: DotApp, private val cb: NewT
         }
     }
 
+    /** "cnn.com" → "CNN", "theguardian.com" → "The Guardian", "duckduckgo.com" → "DuckDuckGo". */
     private fun prettyName(host: String): String {
         val parts = host.split('.')
         val core = if (parts.size >= 2) parts[parts.size - 2] else host
-        return core.replaceFirstChar { it.uppercaseChar() }
+        KNOWN[core]?.let { return it }
+        return when {
+            core.length <= 3 -> core.uppercase()
+            core.startsWith("the") && core.length > 6 -> "The " + core.drop(3).replaceFirstChar { it.uppercaseChar() }
+            else -> core.replaceFirstChar { it.uppercaseChar() }
+        }
     }
 
     companion object {
+        private val KNOWN = mapOf(
+            "duckduckgo" to "DuckDuckGo", "github" to "GitHub", "youtube" to "YouTube", "linkedin" to "LinkedIn",
+            "stackoverflow" to "Stack Overflow", "dothq" to "Dot HQ", "nytimes" to "NYT", "ycombinator" to "Hacker News",
+        )
+
         val DEFAULTS = listOf(
             Site("https://www.dothq.org/", "Dot HQ", 0),
             Site("https://en.wikipedia.org/", "Wikipedia", 0),

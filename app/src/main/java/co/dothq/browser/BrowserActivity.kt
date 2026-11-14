@@ -22,6 +22,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
+import androidx.core.view.drawToBitmap
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import co.dothq.browser.core.Downloads
@@ -65,6 +66,7 @@ import co.dothq.browser.ui.lp
 import co.dothq.browser.ui.margins
 import co.dothq.browser.ui.oval
 import co.dothq.browser.ui.pressable
+import co.dothq.browser.ui.rectIn
 import co.dothq.browser.ui.ringColors
 import co.dothq.browser.ui.withAlpha
 import org.mozilla.geckoview.BasicSelectionActionDelegate
@@ -584,9 +586,23 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
             }
             adopted = true
             val from = peekCenter()
+            val frame = peekView?.let { rectIn(it, root) }
+            val shot = peekView?.let { snapshotTexture(it) }
+            // A session can only be shown in one place: let go of the preview first.
+            peekView?.releaseSession()
+            peekView = null
+            if (shot != null) tabManager.setThumbnail(t, shrink(shot))
             sheet.dismiss()
             if (select) {
                 tabManager.adoptPreview(t, parent, select = true)
+                // The preview lifts out of the sheet and becomes the page.
+                if (frame != null) {
+                    val full = rectIn(content, root)
+                    val g = co.dothq.browser.ui.PageGhost.attach(root, shot, p.bg, full, frame, 18f.dp)
+                    co.dothq.browser.ui.flyGhost(g, frame, full, 18f.dp, 0f, duration = 420) {
+                        g.animate().alpha(0f).setDuration(140).withEndAction { root.removeView(g) }.start()
+                    }
+                }
             } else {
                 flying = true
                 tabManager.adoptPreview(t, parent, select = false)
@@ -646,6 +662,16 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
     }
 
     private var peekView: GeckoView? = null
+
+    /** Synchronous snapshot of a TextureView-backed GeckoView (the peek preview). */
+    private fun snapshotTexture(v: GeckoView): Bitmap? {
+        fun find(x: View): android.view.TextureView? = when (x) {
+            is android.view.TextureView -> x
+            is android.view.ViewGroup -> (0 until x.childCount).firstNotNullOfOrNull { find(x.getChildAt(it)) }
+            else -> null
+        }
+        return find(v)?.takeIf { it.isAvailable }?.bitmap
+    }
 
     private fun peekCenter(): android.graphics.PointF {
         val v = peekView ?: return android.graphics.PointF(root.width / 2f, root.height / 2f)
@@ -869,8 +895,19 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         val list = tabManager.tabs.filter { it.isPrivate == tab.isPrivate }
         val target = list.getOrNull(list.indexOf(tab) + direction) ?: return false
         Haptics.tick(toolbar)
-        tabManager.select(target)
-        toolbar.slideUrl(direction)
+        val from = rectIn(content, root)
+        snapshotPage(tab) { bmp ->
+            tabManager.select(target)
+            toolbar.slideUrl(direction)
+            if (bmp != null) {
+                val g = co.dothq.browser.ui.PageGhost.attach(root, bmp, palette().bg, from, from, 0f)
+                val to = android.graphics.RectF(from).apply {
+                    offset(-direction * from.width() * 0.45f, 0f)
+                    inset(from.width() * 0.05f, from.height() * 0.05f)
+                }
+                co.dothq.browser.ui.flyGhost(g, from, to, 0f, 20f.dp, duration = 320, fadeTo = 0f) { root.removeView(g) }
+            }
+        }
         return true
     }
 
@@ -894,8 +931,8 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         val tab = selected() ?: return
         showMenu(
             listOf(
-                MenuEntry.Item(getString(R.string.new_tab)) { tabManager.newTab(); startEditing() },
-                MenuEntry.Item(getString(R.string.new_private_tab)) { tabManager.newTab(private = true); startEditing() },
+                MenuEntry.Item(getString(R.string.new_tab)) { openNewTab(false, centerOf(anchor)) },
+                MenuEntry.Item(getString(R.string.new_private_tab)) { openNewTab(true, centerOf(anchor)) },
                 MenuEntry.Separator,
                 MenuEntry.Item(getString(R.string.close_tab), danger = true) { closeWithUndo(tab) },
             ),
@@ -954,8 +991,8 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
                         )
                     ),
                     MenuEntry.Separator,
-                    MenuEntry.Item(getString(R.string.new_tab)) { tabManager.newTab(); startEditing() },
-                    MenuEntry.Item(getString(R.string.new_private_tab)) { tabManager.newTab(private = true); startEditing() },
+                    MenuEntry.Item(getString(R.string.new_tab)) { openNewTab(false, centerOf(toolbar.menuButton)) },
+                    MenuEntry.Item(getString(R.string.new_private_tab)) { openNewTab(true, centerOf(toolbar.menuButton)) },
                     MenuEntry.Separator,
                     MenuEntry.Item(getString(R.string.share_page), chevron = true, enabled = !home) { share(tab.url, tab.title) },
                     MenuEntry.Item(getString(R.string.find_in_page), enabled = !home) { openFind() },
@@ -1194,12 +1231,26 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
 
     private fun showSwitcher() {
         val tab = selected() ?: return
+        if (switcher.isShowing) return
         if (toolbar.editing) stopEditing()
-        captureThumbnail(tab)
-        switcher.show(tab.isPrivate)
-        val p = Palette.of(this, tab.isPrivate)
-        setSystemBars(p.frame, p.isDark)
-        ntp.setAnimating(false)
+        val from = rectIn(content, root)
+        snapshotPage(tab) { bmp ->
+            if (bmp != null) tabManager.setThumbnail(tab, shrink(bmp))
+            switcher.show(tab.isPrivate, bmp, from)
+            val p = Palette.of(this, tab.isPrivate)
+            setSystemBars(p.frame, p.isDark)
+            ntp.setAnimating(false)
+        }
+    }
+
+    /** A picture of what the tab is showing right now: the page, or the new tab page. */
+    private fun snapshotPage(tab: Tab, done: (Bitmap?) -> Unit) {
+        if (tab.isHome) {
+            done(runCatching { ntp.drawToBitmap() }.getOrNull())
+            return
+        }
+        if (gecko.session !== tab.session || gecko.width == 0) { done(null); return }
+        captureGecko(done)
     }
 
     private fun hideSwitcher() {
@@ -1246,20 +1297,52 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         val w = 420
         val h = (bmp.height * (w.toFloat() / bmp.width)).toInt().coerceAtLeast(1)
         val scaled = Bitmap.createScaledBitmap(bmp, w, h, true)
-        val crop = minOf(h, (w * 1.5f).toInt())
+        val crop = minOf(h, (w * 2.1f).toInt())
         return if (crop < h) Bitmap.createBitmap(scaled, 0, 0, w, crop) else scaled
     }
 
     override fun onSwitcherPick(tab: Tab) {
         Haptics.tap(root)
         if (tab !== selected()) tabManager.select(tab)
-        hideSwitcher()
+        val p = palette()
+        switcher.hideInto(tab, rectIn(content, root)) {
+            ntp.setAnimating(true)
+        }
+        setSystemBars(p.bg, p.isDark)
     }
 
     override fun onSwitcherNewTab(private: Boolean) {
         hideSwitcher()
+        openNewTab(private, android.graphics.PointF(root.width / 2f, root.height - 40f.dp))
+    }
+
+    /**
+     * A new tab grows out of whatever you pressed — the menu, the tab counter, the New tab pill —
+     * as a circle widening from that point.
+     */
+    private fun openNewTab(private: Boolean, origin: android.graphics.PointF?) {
         tabManager.newTab(private = private)
-        root.postDelayed({ startEditing() }, 120)
+        if (origin != null && ntp.isAttachedToWindow && ntp.width > 0) {
+            val n = rectIn(ntp, root)
+            val cx = (origin.x - n.left).coerceIn(0f, ntp.width.toFloat())
+            val cy = (origin.y - n.top).coerceIn(0f, ntp.height.toFloat())
+            val radius = kotlin.math.hypot(maxOf(cx, ntp.width - cx), maxOf(cy, ntp.height - cy))
+            ntp.animate().cancel()
+            ntp.alpha = 1f
+            ntp.visibility = View.VISIBLE
+            android.view.ViewAnimationUtils.createCircularReveal(ntp, cx.toInt(), cy.toInt(), 0f, radius).apply {
+                duration = 480
+                interpolator = Motion.ease
+                start()
+            }
+        }
+        Haptics.confirm(root)
+        root.postDelayed({ startEditing() }, 220)
+    }
+
+    private fun centerOf(v: View): android.graphics.PointF {
+        val r = rectIn(v, root)
+        return android.graphics.PointF(r.centerX(), r.centerY())
     }
 
     override fun onSwitcherClose(tab: Tab) {
@@ -1278,6 +1361,24 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
 
     private fun closeWithUndo(tab: Tab) {
         Haptics.reject(root)
+        if (tab === selected() && !switcher.isShowing && toolbar.tabsButton.isShown) {
+            val from = rectIn(content, root)
+            val to = rectIn(toolbar.tabsButton, root).let { b ->
+                android.graphics.RectF(b.centerX() - 8f.dp, b.centerY() - 8f.dp, b.centerX() + 8f.dp, b.centerY() + 8f.dp)
+            }
+            snapshotPage(tab) { bmp ->
+                if (bmp != null) {
+                    val g = co.dothq.browser.ui.PageGhost.attach(root, bmp, palette().bg, from, from, 0f)
+                    co.dothq.browser.ui.flyGhost(g, from, to, 0f, 8f.dp, duration = 380, fadeTo = 0.2f) {
+                        root.removeView(g)
+                        toolbar.tabCount.bump()
+                    }
+                }
+                tabManager.close(tab)
+                toast(getString(R.string.tab_closed), getString(R.string.undo)) { tabManager.undoClose() }
+            }
+            return
+        }
         tabManager.close(tab)
         toast(getString(R.string.tab_closed), getString(R.string.undo)) { tabManager.undoClose() }
     }

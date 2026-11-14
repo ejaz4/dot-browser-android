@@ -162,9 +162,10 @@ class DotMenu(private val host: FrameLayout, private val p: Palette) {
         for (i in 0 until list.childCount) {
             val row = list.getChildAt(i)
             val order = if (fromBelow) list.childCount - 1 - i else i
+            val rest = row.alpha // disabled rows stay dimmed
             row.alpha = 0f
             row.translationY = (if (fromBelow) 8f else -8f).dp
-            row.animate().alpha(1f).translationY(0f).setStartDelay(30L + order * 14L)
+            row.animate().alpha(rest).translationY(0f).setStartDelay(30L + order * 14L)
                 .setDuration(Motion.NORMAL).setInterpolator(Motion.ease).start()
         }
         scrimView.animate().alpha(1f).setDuration(Motion.NORMAL)

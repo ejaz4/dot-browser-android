@@ -52,15 +52,105 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
     val isShowing get() = root != null
     val showingPrivate get() = private
 
-    fun show(privateMode: Boolean) {
+    /** The tab whose card is hidden while its page flies into place. */
+    private var hiddenTabId: Long? = null
+
+    /**
+     * Opens the overview. With a [snapshot] of the current page and where it sits on screen
+     * ([from]), the page shrinks and unwinds into its exact card in the grid while the grid
+     * gathers around it.
+     */
+    fun show(privateMode: Boolean, snapshot: android.graphics.Bitmap? = null, from: android.graphics.RectF? = null) {
         if (root != null) return
         private = privateMode
         val r = FrameLayout(host.context).apply { isClickable = true }
         host.addView(r, flp(MATCH, MATCH))
         root = r
+        val sel = switcherHost.tabManager.selected?.takeIf { it.isPrivate == privateMode }
+        hiddenTabId = if (from != null && sel != null) sel.id else null
         render(animateIn = true)
-        r.alpha = 0f
-        r.animate().alpha(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.ease).start()
+        if (from == null || sel == null) {
+            r.alpha = 0f
+            r.animate().alpha(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.ease).start()
+            return
+        }
+
+        // The grid's chrome gathers: background fades in, header drops from above, bar rises.
+        val bg = r.background
+        android.animation.ValueAnimator.ofInt(0, 255).apply {
+            duration = Motion.SLOW
+            interpolator = Motion.ease
+            addUpdateListener { bg?.alpha = it.animatedValue as Int }
+            start()
+        }
+        (r.getChildAt(0) as? LinearLayout)?.let { col ->
+            val header = col.getChildAt(0)
+            val bar = col.getChildAt(col.childCount - 1)
+            header.alpha = 0f; header.translationY = (-12f).dp
+            bar.alpha = 0f; bar.translationY = 12f.dp
+            header.animate().alpha(1f).translationY(0f).setStartDelay(80).setDuration(Motion.SLOW).setInterpolator(Motion.ease).start()
+            bar.animate().alpha(1f).translationY(0f).setStartDelay(80).setDuration(Motion.SLOW).setInterpolator(Motion.ease).start()
+        }
+
+        val ghost = PageGhost.attach(host, snapshot, p.bg, from, from, 0f)
+        val rv = recycler ?: return
+        rv.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                rv.viewTreeObserver.removeOnPreDrawListener(this)
+                val holder = holderFor(sel)
+                val target = holder?.let { rectIn(it.shot, host) }
+                if (holder == null || target == null) {
+                    hiddenTabId = null
+                    ghost.animate().alpha(0f).setDuration(Motion.NORMAL).withEndAction { host.removeView(ghost) }.start()
+                    adapter?.notifyDataSetChanged()
+                    return true
+                }
+                var chromeIn = false
+                flyGhost(ghost, from, target, 0f, 3f.dp, duration = 420, onUpdate = { t ->
+                    // The card's header and ring gather around the page as it lands.
+                    if (!chromeIn && t > 0.68f) {
+                        chromeIn = true
+                        hiddenTabId = null
+                        holder.frame.animate().cancel()
+                        holder.frame.translationY = 0f; holder.frame.scaleX = 1f; holder.frame.scaleY = 1f
+                        holder.frame.animate().alpha(1f).setStartDelay(0).setDuration(150).start()
+                    }
+                }) {
+                    hiddenTabId = null
+                    holder.frame.alpha = 1f
+                    ghost.postOnAnimation { host.removeView(ghost) }
+                }
+                return true
+            }
+        })
+    }
+
+    /**
+     * Closes the overview by expanding [tab]'s card back into the full page at [to]. The caller
+     * selects the tab first, so the real page is waiting underneath when the card lands.
+     */
+    fun hideInto(tab: Tab, to: android.graphics.RectF, then: () -> Unit) {
+        val r = root ?: run { then(); return }
+        val holder = holderFor(tab)
+        val from = holder?.let { rectIn(it.shot, host) }
+        if (holder == null || from == null) { hide(then); return }
+        root = null
+        adapter = null
+        recycler = null
+        holder.frame.alpha = 0f
+        val ghost = PageGhost.attach(host, tab.thumbnail, p.bg, to, from, 3f.dp)
+        // Hold the grid until the card has mostly covered it, so nothing shows through twice.
+        r.animate().alpha(0f).setStartDelay(150).setDuration(260).setInterpolator(Motion.ease).withEndAction { host.removeView(r) }.start()
+        flyGhost(ghost, from, to, 3f.dp, 0f, duration = 400) {
+            ghost.animate().alpha(0f).setDuration(120).withEndAction { host.removeView(ghost) }.start()
+            then()
+        }
+    }
+
+    private fun holderFor(tab: Tab): CardHolder? {
+        val i = items.indexOf(tab)
+        if (i < 0) return null
+        return recycler?.findViewHolderForAdapterPosition(i) as? CardHolder
     }
 
     fun hide(then: (() -> Unit)? = null) {
@@ -318,6 +408,7 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
         val close: FrameLayout
         val thumb: TopCropImageView
         val placeholder: FrameLayout
+        val shot: AspectFrame
 
         init {
             val c = outer.context
@@ -348,7 +439,7 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
             head.addView(close)
             card.addView(head, lp(MATCH, 40.dp))
 
-            val shot = AspectFrame(c, 1.18f).apply { setBackgroundColor(p.bg) }
+            shot = AspectFrame(c, 1.18f).apply { setBackgroundColor(p.bg) }
             thumb = TopCropImageView(c)
             shot.addView(thumb, flp(MATCH, MATCH))
             placeholder = FrameLayout(c)
@@ -377,7 +468,7 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
 
             val shot = tab.thumbnail
             h.placeholder.removeAllViews()
-            if (shot != null && !tab.isHome) {
+            if (shot != null) {
                 h.thumb.visibility = View.VISIBLE
                 h.thumb.setImageBitmap(shot)
             } else {
@@ -391,18 +482,18 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
                 h.placeholder.addView(mark, flp(40.dp, 40.dp, Gravity.CENTER))
             }
 
-            if (android.os.SystemClock.uptimeMillis() < cascadeUntil) {
+            if (tab.id == hiddenTabId) {
+                // Its page is in flight; the card appears when it lands.
+                h.frame.animate().cancel()
+                h.frame.alpha = 0f
+            } else if (android.os.SystemClock.uptimeMillis() < cascadeUntil) {
                 h.frame.alpha = 0f
                 h.frame.translationY = 22f.dp
                 h.frame.scaleX = 0.96f; h.frame.scaleY = 0.96f
                 h.frame.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
                     .setStartDelay(position * 38L).setDuration(Motion.SLOW).setInterpolator(Motion.ease).start()
             }
-            h.frame.setOnClickListener {
-                // The chosen card swells toward you, then the page takes over.
-                h.frame.animate().scaleX(1.05f).scaleY(1.05f).setDuration(Motion.FAST).setInterpolator(Motion.ease)
-                    .withEndAction { switcherHost.onSwitcherPick(tab) }.start()
-            }
+            h.frame.setOnClickListener { switcherHost.onSwitcherPick(tab) }
             h.close.setOnClickListener {
                 val pos = h.bindingAdapterPosition
                 if (pos < 0) return@setOnClickListener

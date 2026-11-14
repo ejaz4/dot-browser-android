@@ -203,6 +203,13 @@ class ToolbarView(context: Context) : LinearLayout(context) {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     v.animate().scaleX(1f).scaleY(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.spring).start()
+                    // Some input paths deliver no moves at all; judge the gesture by where it ended.
+                    if (!dragging && abs(e.rawX - downX) > slop * 2 && abs(e.rawX - downX) > abs(e.rawY - downY) * 1.4f) {
+                        dragging = true
+                        val cancel = MotionEvent.obtain(e).apply { action = MotionEvent.ACTION_CANCEL }
+                        gestures.onTouchEvent(cancel)
+                        cancel.recycle()
+                    }
                     if (dragging) {
                         dragging = false
                         val dx = e.rawX - downX
@@ -577,6 +584,8 @@ class SuggestionsView(context: Context, private val p: Palette, reverse: Boolean
         }
         query = q
         items = s
+        // Nothing to suggest: step aside so the new tab page shows through.
+        visibility = if (s.isEmpty()) INVISIBLE else VISIBLE
         list.adapter?.notifyDataSetChanged()
         list.scrollToPosition(0)
     }
