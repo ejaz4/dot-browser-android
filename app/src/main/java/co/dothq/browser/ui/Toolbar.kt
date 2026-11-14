@@ -36,7 +36,8 @@ class ToolbarView(context: Context) : LinearLayout(context) {
     interface Listener {
         fun onAddressTap()
         fun onAddressLongPress(anchor: View)
-        fun onSwipeTabs(direction: Int)
+        /** Returns true if there was a tab that way. */
+        fun onSwipeTabs(direction: Int): Boolean
         fun onIdentityTap(anchor: View)
         fun onPillAction()
         fun onTabsTap()
@@ -169,19 +170,77 @@ class ToolbarView(context: Context) : LinearLayout(context) {
                 Haptics.heavy(pill)
                 listener?.onAddressLongPress(pill)
             }
-            override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
-                if (abs(vx) > abs(vy) * 1.5f && abs(vx) > 900) {
-                    listener?.onSwipeTabs(if (vx < 0) 1 else -1)
-                    return true
-                }
-                return false
-            }
         })
-        pill.setOnTouchListener { _, e -> if (!editing) gestures.onTouchEvent(e) else false }
+        // Drag the address sideways to move between tabs: the URL follows your finger, then the
+        // next tab's address slides in (or it springs back if there's nowhere to go).
+        val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+        var downX = 0f
+        var downY = 0f
+        var downT = 0L
+        var dragging = false
+        pill.setOnTouchListener { v, e ->
+            if (editing) return@setOnTouchListener false
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX; downY = e.rawY; downT = e.eventTime; dragging = false
+                    v.animate().scaleX(0.985f).scaleY(0.97f).setDuration(Motion.FAST).setInterpolator(Motion.ease).start()
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = e.rawX - downX
+                    val dy = e.rawY - downY
+                    if (!dragging && abs(dx) > slop && abs(dx) > abs(dy) * 1.4f) {
+                        dragging = true
+                        val cancel = MotionEvent.obtain(e).apply { action = MotionEvent.ACTION_CANCEL }
+                        gestures.onTouchEvent(cancel)
+                        cancel.recycle()
+                        v.animate().scaleX(1f).scaleY(1f).setDuration(Motion.FAST).start()
+                    }
+                    if (dragging) {
+                        display.translationX = dx * 0.55f
+                        display.alpha = 1f - (abs(dx) / v.width.coerceAtLeast(1)).coerceAtMost(0.75f)
+                        return@setOnTouchListener true
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.spring).start()
+                    if (dragging) {
+                        dragging = false
+                        val dx = e.rawX - downX
+                        val speed = abs(dx) / (e.eventTime - downT).coerceAtLeast(1)
+                        val far = abs(dx) > 64.dp || (speed > 0.5f && abs(dx) > 28.dp)
+                        val switched = e.actionMasked == MotionEvent.ACTION_UP && far &&
+                            (listener?.onSwipeTabs(if (dx < 0) 1 else -1) ?: false)
+                        if (!switched) {
+                            display.animate().translationX(0f).alpha(1f).setDuration(Motion.SLOW).setInterpolator(Motion.spring).start()
+                        }
+                        return@setOnTouchListener true
+                    }
+                }
+            }
+            gestures.onTouchEvent(e)
+        }
+        listOf(identityBox, shieldChip, tabsButton, menuButton, cancel).forEach { it.sinkOnPress(0.88f) }
+        action.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> v.animate().scaleX(0.86f).scaleY(0.86f).setDuration(Motion.FAST).start()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.spring).start()
+            }
+            false
+        }
 
         identityBox.setOnClickListener { if (!editing) listener?.onIdentityTap(identityBox) }
         shieldChip.setOnClickListener { listener?.onIdentityTap(shieldChip) }
-        action.setOnClickListener { Haptics.tap(it); listener?.onPillAction() }
+        action.setOnClickListener {
+            Haptics.tap(it)
+            if (!editing && !loading) {
+                // A full turn of the reload arrow.
+                actionIcon.animate().cancel()
+                actionIcon.rotation = 0f
+                actionIcon.animate().rotation(360f).setDuration(560).setInterpolator(Motion.ease).withEndAction { actionIcon.rotation = 0f }.start()
+            }
+            listener?.onPillAction()
+        }
         tabsButton.setOnClickListener { Haptics.tap(it); listener?.onTabsTap() }
         tabsButton.setOnLongClickListener { Haptics.heavy(it); listener?.onTabsLongPress(it); true }
         menuButton.setOnClickListener { listener?.onMenuTap(it) }
@@ -277,7 +336,14 @@ class ToolbarView(context: Context) : LinearLayout(context) {
         }
         val wasHidden = shieldChip.visibility != VISIBLE
         shieldChip.visibility = VISIBLE
+        val changed = shieldCount.text.toString() != count.toString()
         shieldCount.text = count.toString()
+        if (changed && !wasHidden) {
+            // The number rolls up into place.
+            shieldCount.translationY = 6f.dp
+            shieldCount.alpha = 0.2f
+            shieldCount.animate().translationY(0f).alpha(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.ease).start()
+        }
         if (wasHidden) {
             shieldChip.alpha = 0f
             shieldChip.scaleX = 0.6f; shieldChip.scaleY = 0.6f
@@ -294,23 +360,60 @@ class ToolbarView(context: Context) : LinearLayout(context) {
         updateActionIcon()
     }
 
+    private var actionRes = 0
+
+    private fun setActionIcon(res: Int) {
+        if (res == actionRes) return
+        val morph = actionRes != 0 && action.isShown && action.isAttachedToWindow && action.width > 0
+        actionRes = res
+        actionIcon.setImageResource(res)
+        if (!morph) {
+            actionIcon.animate().cancel()
+            actionIcon.rotation = 0f; actionIcon.scaleX = 1f; actionIcon.scaleY = 1f; actionIcon.alpha = 1f
+        } else {
+            // Reload and stop trade places with a quarter turn.
+            actionIcon.animate().cancel()
+            actionIcon.rotation = -90f
+            actionIcon.scaleX = 0.5f; actionIcon.scaleY = 0.5f
+            actionIcon.alpha = 0f
+            actionIcon.animate().rotation(0f).scaleX(1f).scaleY(1f).alpha(1f)
+                .setDuration(Motion.SLOW).setInterpolator(Motion.spring).start()
+        }
+    }
+
     private fun updateActionIcon() {
         when {
             editing -> {
                 action.visibility = if (edit.text.isNullOrEmpty()) GONE else VISIBLE
-                actionIcon.setImageResource(R.drawable.ic_close)
+                setActionIcon(R.drawable.ic_close)
                 action.contentDescription = context.getString(R.string.clear)
             }
             loading -> {
                 action.visibility = VISIBLE
-                actionIcon.setImageResource(R.drawable.ic_close)
+                setActionIcon(R.drawable.ic_close)
                 action.contentDescription = context.getString(R.string.stop)
             }
             else -> {
                 action.visibility = if (hostText.text.isNullOrEmpty()) GONE else VISIBLE
-                actionIcon.setImageResource(R.drawable.ic_reload)
+                setActionIcon(R.drawable.ic_reload)
                 action.contentDescription = context.getString(R.string.reload)
             }
+        }
+    }
+
+    private var borderAnim: android.animation.ValueAnimator? = null
+
+    /** Fades the accent ring of the address field in or out. */
+    private fun animateBorder(to: Float) {
+        borderAnim?.cancel()
+        val bg = rounded(p.field, Radius.field, android.graphics.Color.TRANSPARENT, 1.5f.dp.toInt())
+        pill.background = bg
+        val from = if (to > 0f) 0f else 0.55f
+        borderAnim = android.animation.ValueAnimator.ofFloat(from, to).apply {
+            duration = Motion.NORMAL
+            interpolator = Motion.ease
+            addUpdateListener { bg.setStroke(1.5f.dp.toInt(), withAlpha(p.accent, it.animatedValue as Float)) }
+            start()
         }
     }
 
@@ -333,7 +436,7 @@ class ToolbarView(context: Context) : LinearLayout(context) {
         cancel.alpha = 0f
         cancel.translationX = 12f.dp
         cancel.animate().alpha(1f).translationX(0f).setDuration(Motion.NORMAL).setInterpolator(Motion.ease).start()
-        pill.background = rounded(p.field, Radius.field, withAlpha(p.accent, 0.55f), 1.5f.dp.toInt())
+        animateBorder(0.55f)
         updateActionIcon()
     }
 
@@ -349,7 +452,7 @@ class ToolbarView(context: Context) : LinearLayout(context) {
         tabsButton.alpha = 0f; menuButton.alpha = 0f
         tabsButton.animate().alpha(1f).setDuration(Motion.NORMAL).start()
         menuButton.animate().alpha(1f).setDuration(Motion.NORMAL).start()
-        pill.background = rounded(p.field, Radius.field)
+        animateBorder(0f)
         updateActionIcon()
     }
 
@@ -464,7 +567,14 @@ class SuggestionsView(context: Context, private val p: Palette, reverse: Boolean
         addView(list, flp(MATCH, MATCH))
     }
 
+    private var firstSubmit = true
+    private var cascadeUntil = 0L
+
     fun submit(q: String, s: List<Suggestion>) {
+        if (firstSubmit && s.isNotEmpty()) {
+            firstSubmit = false
+            cascadeUntil = android.os.SystemClock.uptimeMillis() + 400
+        }
         query = q
         items = s
         list.adapter?.notifyDataSetChanged()
@@ -520,6 +630,7 @@ class SuggestionsView(context: Context, private val p: Palette, reverse: Boolean
                 rotation = -45f
             }, flp(16.dp, 16.dp, Gravity.CENTER))
             h.fill.background = ripple(p.ripple, Radius.field)
+            h.fill.sinkOnPress(0.85f)
             row.addView(h.fill, lp(44.dp, 44.dp))
             return h
         }
@@ -543,6 +654,12 @@ class SuggestionsView(context: Context, private val p: Palette, reverse: Boolean
                 Suggestion.Kind.HEADER -> Unit
             }
             h.fill.visibility = if (s.kind == Suggestion.Kind.TAB) GONE else VISIBLE
+            if (android.os.SystemClock.uptimeMillis() < cascadeUntil && position < 10) {
+                h.itemView.alpha = 0f
+                h.itemView.translationY = 10f.dp
+                h.itemView.animate().alpha(1f).translationY(0f).setStartDelay(position * 22L)
+                    .setDuration(Motion.NORMAL).setInterpolator(Motion.ease).start()
+            }
             h.itemView.setOnClickListener { Haptics.tap(it); onPick(s) }
             h.fill.setOnClickListener { Haptics.tick(it); onFill(s) }
         }

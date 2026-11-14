@@ -86,6 +86,18 @@ class NewTabPage(context: Context, private val app: DotApp, private val cb: NewT
         loadShortcuts()
     }
 
+    /** Content rises into place, one piece after another. */
+    fun playEntrance() {
+        val col = scroll.getChildAt(0) as? LinearLayout ?: return
+        for (i in 0 until col.childCount) {
+            val v = col.getChildAt(i)
+            v.animate().cancel()
+            v.alpha = 0f
+            v.translationY = 16f.dp
+            v.animate().alpha(1f).translationY(0f).setStartDelay(i * 45L).setDuration(Motion.SLOW + 60).setInterpolator(Motion.ease).start()
+        }
+    }
+
     fun setAnimating(on: Boolean) {
         backdrop.animated = on
         if (on) backdrop.invalidate()
@@ -109,7 +121,20 @@ class NewTabPage(context: Context, private val app: DotApp, private val cb: NewT
             orientation = LinearLayout.VERTICAL
             setPadding(24.dp, if (toolbarAtBottom) 72.dp else 40.dp, 24.dp, 32.dp)
         }
-        val ring = DotRingView(c)
+        val ring = DotRingView(c).apply {
+            contentDescription = c.getString(R.string.app_name)
+            setOnClickListener {
+                Haptics.tick(it)
+                animate().scaleX(1.12f).scaleY(1.12f).setDuration(Motion.FAST).setInterpolator(Motion.ease).withEndAction {
+                    animate().scaleX(1f).scaleY(1f).setDuration(Motion.SLOW).setInterpolator(Motion.spring).start()
+                }.start()
+            }
+            setOnLongClickListener {
+                Haptics.spin(it)
+                animate().rotationBy(720f).setDuration(1100).setInterpolator(Motion.ease).start()
+                true
+            }
+        }
         col.addView(ring, lp(72.dp, 72.dp).margins(l = (-14).dp, t = (-8).dp, b = 8.dp))
 
         col.addView(c.label(greeting(), 36f, p.text, bold = true, tracking = -0.035f).apply {
@@ -223,6 +248,7 @@ class NewTabPage(context: Context, private val app: DotApp, private val cb: NewT
                 pressable(p, Radius.card)
                 setOnClickListener { Haptics.tap(it); cb.ntpOpen(site.url, false) }
                 setOnLongClickListener { Haptics.heavy(it); cb.ntpSiteMenu(site, it); true }
+                sinkOnPress(0.92f)
             }
             val box = FrameLayout(c).apply {
                 background = rounded(withAlpha(p.field, 0.9f), 16f.dp, p.border, if (p.isDark) 0 else 1)

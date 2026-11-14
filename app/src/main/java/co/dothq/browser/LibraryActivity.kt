@@ -232,26 +232,43 @@ class LibraryActivity : AppCompatActivity() {
         finish()
     }
 
+    private val sheet by lazy { co.dothq.browser.ui.Sheet(root, p) }
+
     private fun itemMenu(site: Site, anchor: View, x: Int, y: Int) {
-        menu?.dismiss(false)
-        val m = DotMenu(root, p)
-        menu = m
-        val loc = IntArray(2).also { anchor.getLocationInWindow(it) }
-        val rl = IntArray(2).also { root.getLocationInWindow(it) }
-        m.show(
-            listOf(
-                MenuEntry.Item(getString(R.string.open_in_new_tab)) { open(site, newTab = true) },
-                MenuEntry.Item(getString(R.string.open_in_private_tab)) { open(site, private = true) },
-                MenuEntry.Separator,
-                MenuEntry.Item(getString(R.string.delete), danger = true) {
+        val host = Urls.host(site.url)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16.dp, 2.dp, 16.dp, 0)
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(6.dp, 0, 6.dp, 14.dp)
+                addView(ImageView(context).apply { bindFavicon(Favicons.memoryCached(host), host) }, lp(22.dp, 22.dp).margins(r = 12.dp))
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = lp(0, WRAP, 1f)
+                    addView(label(site.title.ifBlank { host }, 16f, p.text, bold = true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END })
+                    addView(label(Urls.pretty(site.url), 13f, p.text3).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.MIDDLE; setPadding(0, 3.dp, 0, 0) })
+                })
+            })
+            addView(co.dothq.browser.ui.actionList(context, p, listOf(
+                co.dothq.browser.ui.SheetAction(R.drawable.ic_open_new, getString(R.string.open_in_new_tab)) { sheet.dismiss(); open(site, newTab = true) },
+                co.dothq.browser.ui.SheetAction(R.drawable.ic_private, getString(R.string.open_in_private_tab)) { sheet.dismiss(); open(site, private = true) },
+                co.dothq.browser.ui.SheetAction(R.drawable.ic_copy, getString(R.string.copy_link)) {
+                    sheet.dismiss()
+                    (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                        .setPrimaryClip(android.content.ClipData.newPlainText("URL", site.url))
+                },
+                co.dothq.browser.ui.SheetAction(R.drawable.ic_bin, getString(R.string.delete), danger = true) {
+                    sheet.dismiss()
                     io.execute {
                         if (page == PAGE_HISTORY) app.db.deleteHistory(site.url) else app.db.removeBookmark(site.url)
                         runOnUiThread { load() }
                     }
                 },
-            ),
-            Anchor.AtPoint(loc[0] - rl[0] + x, loc[1] - rl[1] + y),
-        )
+            )))
+        }
+        sheet.show(box)
     }
 
     private fun confirmClear() {
@@ -265,7 +282,7 @@ class LibraryActivity : AppCompatActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (menu?.isShowing == true) menu?.dismiss() else @Suppress("DEPRECATION") super.onBackPressed()
+        if (sheet.isShowing) sheet.dismiss() else @Suppress("DEPRECATION") super.onBackPressed()
     }
 
     private inner class Holder(v: View) : RecyclerView.ViewHolder(v)

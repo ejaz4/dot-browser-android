@@ -41,12 +41,14 @@ import co.dothq.browser.ui.Fonts
 import co.dothq.browser.ui.Haptics
 import co.dothq.browser.ui.MATCH
 import co.dothq.browser.ui.MenuEntry
+import co.dothq.browser.ui.Motion
 import co.dothq.browser.ui.NavButton
 import co.dothq.browser.ui.NewTabHost
 import co.dothq.browser.ui.NewTabPage
 import co.dothq.browser.ui.Palette
 import co.dothq.browser.ui.Radius
 import co.dothq.browser.ui.Sheet
+import co.dothq.browser.ui.SheetAction
 import co.dothq.browser.ui.Suggestion
 import co.dothq.browser.ui.SuggestionsView
 import co.dothq.browser.ui.SwitcherHost
@@ -353,6 +355,7 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
             ntp.visibility = View.VISIBLE
             ntp.alpha = 0f
             ntp.animate().alpha(1f).setDuration(160).start()
+            ntp.playEntrance()
             ntp.refresh()
         } else if (!showNtp && ntp.visibility == View.VISIBLE) {
             ntp.animate().alpha(0f).setDuration(120).withEndAction { ntp.visibility = View.GONE; ntp.alpha = 1f }.start()
@@ -396,17 +399,82 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         findBar?.let { closeFind() }
         applyPalette(tab)
         render(tab)
+        if (previous != null && previous !== tab) toolbar.aurora.pulse()
         if (switcher.isShowing) switcher.refresh()
     }
 
     override fun onTabsChanged() {
-        selected()?.let { toolbar.tabCount.setCount(countFor(it), animate = true) }
+        selected()?.let { toolbar.tabCount.setCount(countFor(it), animate = !flying) }
         switcher.refresh()
+    }
+
+    private var flying = false
+    private var lastTouch = android.graphics.PointF(0f, 0f)
+    private var loadStarted = 0L
+
+    /**
+     * Opening a link in the background: a little Dot ring leaves your finger and arcs into the
+     * tab counter, which catches it.
+     */
+    private fun flyToTabs(fromX: Float, fromY: Float) {
+        if (toolbarSlot.visibility != View.VISIBLE || toolbar.tabsButton.visibility != View.VISIBLE) {
+            toolbar.tabCount.bump(); return
+        }
+        val t = IntArray(2).also { toolbar.tabsButton.getLocationInWindow(it) }
+        val r = IntArray(2).also { root.getLocationInWindow(it) }
+        val tx = t[0] - r[0] + toolbar.tabsButton.width / 2f
+        val ty = t[1] - r[1] + toolbar.tabsButton.height / 2f
+        val size = 22.dp
+        val dot = co.dothq.browser.ui.DotRingView(this).apply { halo = false; thickness = 0.62f }
+        root.addView(dot, flp(size, size))
+        val cx = (fromX + tx) / 2f + (tx - fromX) * 0.15f
+        val cy = minOf(fromY, ty) - 140.dp
+        flying = true
+        android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 620
+            interpolator = android.view.animation.PathInterpolator(0.35f, 0f, 0.25f, 1f)
+            addUpdateListener { a ->
+                val k = a.animatedValue as Float
+                val u = 1f - k
+                dot.x = u * u * fromX + 2 * u * k * cx + k * k * tx - size / 2f
+                dot.y = u * u * fromY + 2 * u * k * cy + k * k * ty - size / 2f
+                val s = 1f - 0.5f * k
+                dot.scaleX = s; dot.scaleY = s
+                dot.rotation = k * 300f
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    root.removeView(dot)
+                    flying = false
+                    selected()?.let { toolbar.tabCount.setCount(countFor(it), animate = false) }
+                    toolbar.tabCount.bump()
+                    Haptics.tick(root)
+                }
+            })
+            start()
+        }
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN && ::root.isInitialized) {
+            val r = IntArray(2).also { root.getLocationOnScreen(it) }
+            lastTouch.set(ev.rawX - r[0], ev.rawY - r[1])
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onTabChanged(tab: Tab, change: Change) {
         if (switcher.isShowing && change in setOf(Change.TITLE, Change.FAVICON, Change.THUMBNAIL, Change.URL)) {
             switcher.refreshTab(tab)
+        }
+        if (tab === peekTab) {
+            val halo = peekHalo
+            when (change) {
+                Change.PROGRESS -> if (tab.loading) halo?.setProgress(tab.progress)
+                Change.LOADING -> if (tab.loading) halo?.start() else halo?.finish()
+                else -> Unit
+            }
+            return
         }
         if (tab !== selected()) return
         val p = palette()
@@ -417,7 +485,15 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
             Change.PROGRESS -> if (tab.loading) toolbar.aurora.setProgress(tab.progress)
             Change.LOADING -> {
                 toolbar.setLoading(tab.loading)
-                if (tab.loading) toolbar.aurora.start() else toolbar.aurora.finish()
+                if (tab.loading) {
+                    loadStarted = android.os.SystemClock.uptimeMillis()
+                    toolbar.aurora.start()
+                } else {
+                    toolbar.aurora.finish()
+                    // You waited; a whisper says it's ready.
+                    if (loadStarted > 0 && android.os.SystemClock.uptimeMillis() - loadStarted > 2500 && !tab.isHome) Haptics.soft(root)
+                    loadStarted = 0
+                }
             }
             Change.SECURITY -> renderIdentity(tab, p)
             Change.TRACKERS -> toolbar.setTrackers(tab.trackersBlocked, pulse = true)
@@ -429,34 +505,153 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         if (tab !== selected()) return
         val link = element.linkUri
         val src = element.srcUri
-        val entries = mutableListOf<MenuEntry>()
         val title = element.title?.ifBlank { null } ?: element.linkText?.trim()?.ifBlank { null } ?: element.altText?.ifBlank { null }
-        entries += MenuEntry.Header(title ?: Urls.host(link ?: src ?: tab.url).ifEmpty { "Link" }, link ?: src)
-        entries += MenuEntry.Separator
+        val isImage = element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_IMAGE
+        val isMedia = element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_VIDEO ||
+            element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_AUDIO
+        val actions = mutableListOf<SheetAction>()
         if (link != null) {
-            entries += MenuEntry.Item(getString(R.string.open_in_new_tab)) { openInBackground(link, tab) }
-            entries += MenuEntry.Item(getString(R.string.open_in_private_tab)) { tabManager.newTab(link, private = true) }
-            entries += MenuEntry.Item(getString(R.string.copy_link)) { copy(link) }
-            entries += MenuEntry.Item(getString(R.string.share_link), chevron = true) { share(link, title) }
+            actions += SheetAction(R.drawable.ic_private, getString(R.string.open_in_private_tab)) { sheet.dismiss(); tabManager.newTab(link, private = true) }
+            actions += SheetAction(R.drawable.ic_copy, getString(R.string.copy_link)) { sheet.dismiss(); copy(link) }
+            actions += SheetAction(R.drawable.ic_share, getString(R.string.share_link)) { sheet.dismiss(); share(link, title) }
         }
-        if (src != null) {
-            if (link != null) entries += MenuEntry.Separator
-            when (element.type) {
-                GeckoSession.ContentDelegate.ContextElement.TYPE_IMAGE -> {
-                    entries += MenuEntry.Item(getString(R.string.open_image)) { openInBackground(src, tab) }
-                    entries += MenuEntry.Item(getString(R.string.save_image)) { fetchAndSave(src, tab.isPrivate) }
-                    entries += MenuEntry.Item(getString(R.string.copy_image_link)) { copy(src) }
-                }
-                GeckoSession.ContentDelegate.ContextElement.TYPE_VIDEO, GeckoSession.ContentDelegate.ContextElement.TYPE_AUDIO -> {
-                    entries += MenuEntry.Item(getString(R.string.save_media)) { fetchAndSave(src, tab.isPrivate) }
-                    entries += MenuEntry.Item(getString(R.string.copy_link)) { copy(src) }
-                }
+        if (src != null && isImage) {
+            actions += SheetAction(R.drawable.ic_downloads, getString(R.string.save_image)) { sheet.dismiss(); fetchAndSave(src, tab.isPrivate) }
+            actions += SheetAction(R.drawable.ic_link, getString(R.string.copy_image_link)) { sheet.dismiss(); copy(src) }
+        }
+        if (src != null && isMedia) {
+            actions += SheetAction(R.drawable.ic_downloads, getString(R.string.save_media)) { sheet.dismiss(); fetchAndSave(src, tab.isPrivate) }
+            actions += SheetAction(R.drawable.ic_copy, getString(R.string.copy_link)) { sheet.dismiss(); copy(src) }
+        }
+        Haptics.heavy(root)
+        // Links (and images) get a live preview; media just gets its actions.
+        val previewUrl = link ?: src?.takeIf { isImage }
+        peek(previewUrl, link ?: src ?: return, title, tab, actions, openLabel = if (link == null && isImage) R.string.open_image else R.string.open_in_new_tab)
+    }
+
+    /* ---- Link peek -------------------------------------------------------------------------- */
+
+    private var peekTab: Tab? = null
+    private var peekHalo: co.dothq.browser.ui.AuroraOutline? = null
+
+    /**
+     * Long-press a link: a sheet rises with a live preview of the page (loading in its own quiet
+     * session, wrapped in the Dot halo), its address, and big thumb-sized actions. Opening in a
+     * new tab adopts the preview, so the tab is already loaded.
+     */
+    private fun peek(previewUrl: String?, url: String, title: String?, parent: Tab, extra: List<SheetAction>, openLabel: Int = R.string.open_in_new_tab) {
+        activeMenu?.dismiss(false)
+        val p = palette()
+        val c = this
+        var adopted = false
+        val preview = previewUrl?.let { tabManager.createPreview(it, parent.isPrivate) }
+        peekTab = preview
+
+        val box = LinearLayout(c).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16.dp, 2.dp, 16.dp, 0)
+        }
+
+        // Header: icon, title, address.
+        val host = Urls.host(url)
+        box.addView(LinearLayout(c).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(6.dp, 0, 6.dp, 12.dp)
+            addView(ImageView(c).apply {
+                bindFavicon(co.dothq.browser.core.Favicons.memoryCached(host), host)
+                co.dothq.browser.core.Favicons.get(c, host, allowNetwork = false) { b -> if (b != null) bindFavicon(b, host) }
+            }, lp(22.dp, 22.dp).margins(r = 12.dp))
+            addView(LinearLayout(c).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = lp(0, WRAP, 1f)
+                addView(c.label(title ?: host.ifEmpty { url }, 16f, p.text, bold = true, tracking = -0.01f).apply {
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                addView(c.label(Urls.pretty(url), 13f, p.text3).apply {
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                    setPadding(0, 3.dp, 0, 0)
+                })
+            })
+        })
+
+        fun open(select: Boolean) {
+            val t = preview
+            if (t == null) {
+                if (select) tabManager.newTab(url, private = parent.isPrivate, parent = parent) else openInBackground(url, parent)
+                sheet.dismiss()
+                return
+            }
+            adopted = true
+            val from = peekCenter()
+            sheet.dismiss()
+            if (select) {
+                tabManager.adoptPreview(t, parent, select = true)
+            } else {
+                flying = true
+                tabManager.adoptPreview(t, parent, select = false)
+                flyToTabs(from.x, from.y)
+                toast(getString(R.string.opened_in_new_tab), getString(R.string.switch_tab)) { tabManager.select(t) }
             }
         }
-        val offset = IntArray(2).also { gecko.getLocationInWindow(it) }
-        val rootOffset = IntArray(2).also { root.getLocationInWindow(it) }
-        Haptics.heavy(root)
-        showMenu(entries, Anchor.AtPoint(x + offset[0] - rootOffset[0], y + offset[1] - rootOffset[1]))
+
+        // The live preview.
+        if (preview != null) {
+            val frame = FrameLayout(c)
+            val halo = co.dothq.browser.ui.AuroraOutline(c).apply { cornerRadius = 18f.dp; setPrivate(parent.isPrivate) }
+            peekHalo = halo
+            frame.addView(halo, flp(MATCH, MATCH))
+            val m = halo.glowMargin
+            val card = FrameLayout(c).apply {
+                background = co.dothq.browser.ui.rounded(p.bg, 18f.dp, p.border, 1)
+                outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+                clipToOutline = true
+            }
+            val view = GeckoView(c).apply {
+                setViewBackend(GeckoView.BACKEND_TEXTURE_VIEW)
+                coverUntilFirstPaint(p.bg)
+            }
+            card.addView(view, flp(MATCH, MATCH))
+            // The preview is a picture of the page, not the page: one tap opens it.
+            card.addView(View(c).apply {
+                background = co.dothq.browser.ui.ripple(p.ripple, 18f.dp)
+                contentDescription = getString(R.string.open)
+                setOnClickListener { Haptics.confirm(it); open(select = true) }
+            }, flp(MATCH, MATCH))
+            frame.addView(card, flp(MATCH, MATCH).margins(m, m, m, m))
+            val h = (resources.displayMetrics.heightPixels * 0.42f).toInt().coerceAtMost(460.dp)
+            box.addView(frame, lp(MATCH, h + 2 * m).margins(l = -m, r = -m, b = 6.dp))
+            preview.session?.let { view.setSession(it) }
+            halo.start()
+            peekView = view
+        }
+
+        // Actions: open first, then the rest.
+        val actions = listOf(SheetAction(R.drawable.ic_open_new, getString(openLabel)) { open(select = false) }) + extra
+        box.addView(co.dothq.browser.ui.actionList(c, p, actions), lp(MATCH, WRAP).margins(t = 6.dp))
+
+        sheet.onDismiss = {
+            sheet.onDismiss = null
+            peekTab = null
+            peekHalo = null
+            val v = peekView
+            peekView = null
+            // Let the sheet slide away before letting go of the page.
+            root.postDelayed({
+                v?.releaseSession()
+                if (!adopted && preview != null) tabManager.discardPreview(preview)
+            }, 260)
+        }
+        sheet.show(box)
+    }
+
+    private var peekView: GeckoView? = null
+
+    private fun peekCenter(): android.graphics.PointF {
+        val v = peekView ?: return android.graphics.PointF(root.width / 2f, root.height / 2f)
+        val a = IntArray(2).also { v.getLocationInWindow(it) }
+        val r = IntArray(2).also { root.getLocationInWindow(it) }
+        return android.graphics.PointF(a[0] - r[0] + v.width / 2f, a[1] - r[1] + v.height / 2f)
     }
 
     override fun onFullScreen(tab: Tab, fullScreen: Boolean) {
@@ -523,8 +718,11 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
     }
 
     private fun openInBackground(url: String, parent: Tab) {
+        val from = android.graphics.PointF(lastTouch.x, lastTouch.y)
+        flying = true
         val t = tabManager.newTab(url, private = parent.isPrivate, select = false, parent = parent)
-        toast(getString(R.string.open_in_new_tab), "Switch") { tabManager.select(t) }
+        flyToTabs(from.x, from.y)
+        toast(getString(R.string.opened_in_new_tab), getString(R.string.switch_tab)) { tabManager.select(t) }
     }
 
     private fun dismissOverlays() {
@@ -666,13 +864,14 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         if (entries.isNotEmpty()) showMenu(entries, Anchor.FromView(anchor, above = app.prefs.toolbarAtBottom))
     }
 
-    override fun onSwipeTabs(direction: Int) {
-        val tab = selected() ?: return
+    override fun onSwipeTabs(direction: Int): Boolean {
+        val tab = selected() ?: return false
         val list = tabManager.tabs.filter { it.isPrivate == tab.isPrivate }
-        val target = list.getOrNull(list.indexOf(tab) + direction) ?: return
+        val target = list.getOrNull(list.indexOf(tab) + direction) ?: return false
         Haptics.tick(toolbar)
         tabManager.select(target)
         toolbar.slideUrl(direction)
+        return true
     }
 
     override fun onIdentityTap(anchor: View) {
@@ -732,7 +931,18 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         io.execute {
             val bookmarked = !home && app.db.isBookmarked(url)
             root.post {
-                val entries = listOf(
+                val n = tab.trackersBlocked
+                val status = if (home) null else MenuEntry.Status(
+                    R.drawable.ic_shield_check,
+                    when (n) {
+                        0 -> getString(R.string.trackers_on_page_none)
+                        1 -> getString(R.string.trackers_on_page_one)
+                        else -> getString(R.string.trackers_on_page_many, n)
+                    },
+                    palette().shield,
+                ) { showSiteInfo(tab) }
+                val entries = listOfNotNull(
+                    status,
                     MenuEntry.Nav(
                         listOf(
                             NavButton(R.drawable.ic_arrow_left, getString(R.string.back), tab.canGoBack) { tab.session?.goBack() },
@@ -805,8 +1015,8 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
     }
 
     private fun screenshot(tab: Tab) {
-        gecko.capturePixels().accept({ bmp ->
-            if (bmp == null) { toast(getString(R.string.screenshot_failed)); return@accept }
+        captureGecko { bmp ->
+            if (bmp == null) { toast(getString(R.string.screenshot_failed)); return@captureGecko }
             Haptics.confirm(root)
             flash()
             Downloads.saveBitmap(this, bmp, tab.title) { saved ->
@@ -815,7 +1025,7 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
                     try { startActivity(Downloads.openIntent(saved)) } catch (_: ActivityNotFoundException) {}
                 }
             }
-        }, { toast(getString(R.string.screenshot_failed)) })
+        }
     }
 
     /** A soft white flash, like a shutter. */
@@ -962,6 +1172,9 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         findBar = bar
         toolbar.visibility = View.GONE
         toolbarSlot.addView(bar, flp(MATCH, 56.dp))
+        bar.alpha = 0f
+        bar.translationY = (if (app.prefs.toolbarAtBottom) 16f else -16f).dp
+        bar.animate().alpha(1f).translationY(0f).setDuration(Motion.NORMAL).setInterpolator(Motion.ease).start()
         bar.input.requestFocus()
         bar.input.post {
             (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(bar.input, InputMethodManager.SHOW_IMPLICIT)
@@ -998,9 +1211,35 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
 
     private fun captureThumbnail(tab: Tab) {
         if (tab.isHome || gecko.session !== tab.session || gecko.width == 0) return
-        gecko.capturePixels().accept({ bmp ->
-            if (bmp != null) tabManager.setThumbnail(tab, shrink(bmp))
-        }, { })
+        captureGecko { bmp -> if (bmp != null) tabManager.setThumbnail(tab, shrink(bmp)) }
+    }
+
+    /**
+     * Grabs what Gecko is showing. GeckoView's own capture reads back from GL, which fails on
+     * some GPUs/emulators; fall back to PixelCopy on its SurfaceView, which works everywhere.
+     */
+    private fun captureGecko(done: (Bitmap?) -> Unit) {
+        gecko.capturePixels().accept({ bmp -> if (bmp != null) done(bmp) else pixelCopy(done) }, { pixelCopy(done) })
+    }
+
+    private fun pixelCopy(done: (Bitmap?) -> Unit) {
+        fun find(v: View): android.view.SurfaceView? = when (v) {
+            is android.view.SurfaceView -> v
+            is android.view.ViewGroup -> (0 until v.childCount).firstNotNullOfOrNull { find(v.getChildAt(it)) }
+            else -> null
+        }
+        val surface = find(gecko)
+        if (surface == null || surface.width == 0 || surface.height == 0 || !surface.holder.surface.isValid) {
+            done(null); return
+        }
+        val bmp = Bitmap.createBitmap(surface.width, surface.height, Bitmap.Config.ARGB_8888)
+        try {
+            android.view.PixelCopy.request(surface, bmp, { result ->
+                done(if (result == android.view.PixelCopy.SUCCESS) bmp else null)
+            }, android.os.Handler(mainLooper))
+        } catch (_: IllegalArgumentException) {
+            done(null)
+        }
     }
 
     private fun shrink(bmp: Bitmap): Bitmap {
@@ -1038,6 +1277,7 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
     }
 
     private fun closeWithUndo(tab: Tab) {
+        Haptics.reject(root)
         tabManager.close(tab)
         toast(getString(R.string.tab_closed), getString(R.string.undo)) { tabManager.undoClose() }
     }
@@ -1049,15 +1289,14 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
     }
 
     override fun ntpSiteMenu(site: Site, anchor: View) {
-        val loc = IntArray(2).also { anchor.getLocationInWindow(it) }
-        val rootLoc = IntArray(2).also { root.getLocationInWindow(it) }
-        showMenu(
+        val parent = selected() ?: return
+        peek(
+            site.url, site.url, site.title.ifBlank { null }, parent,
             listOf(
-                MenuEntry.Header(site.title.ifBlank { Urls.host(site.url) }, Urls.pretty(site.url)),
-                MenuEntry.Separator,
-                MenuEntry.Item(getString(R.string.open_in_new_tab)) { tabManager.newTab(site.url) },
-                MenuEntry.Item(getString(R.string.open_in_private_tab)) { tabManager.newTab(site.url, private = true) },
-                MenuEntry.Item(getString(R.string.delete), danger = true) {
+                SheetAction(R.drawable.ic_private, getString(R.string.open_in_private_tab)) { sheet.dismiss(); tabManager.newTab(site.url, private = true) },
+                SheetAction(R.drawable.ic_share, getString(R.string.share_link)) { sheet.dismiss(); share(site.url, site.title) },
+                SheetAction(R.drawable.ic_bin, getString(R.string.remove_shortcut), danger = true) {
+                    sheet.dismiss()
                     io.execute {
                         app.db.deleteHistory(site.url)
                         app.db.removeBookmark(site.url)
@@ -1065,7 +1304,6 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
                     }
                 },
             ),
-            Anchor.AtPoint(loc[0] - rootLoc[0] + anchor.width / 2, loc[1] - rootLoc[1] + anchor.height / 2),
         )
     }
 

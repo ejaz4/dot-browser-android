@@ -24,6 +24,7 @@ class DotApp : Application() {
         instance = this
         prefs = Prefs(this)
         Fonts.init(this)
+        co.dothq.browser.ui.Haptics.init(this)
         applyTheme()
     }
 

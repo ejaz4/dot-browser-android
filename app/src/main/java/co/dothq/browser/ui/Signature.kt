@@ -110,6 +110,18 @@ class AuroraOutline @JvmOverloads constructor(context: Context, attrs: Attribute
         tick()
     }
 
+    /** A brief full-ring bloom, e.g. when switching tabs. Ignored while a page is loading. */
+    fun pulse() {
+        if (active && !finishing) return
+        active = true
+        shown = 1f
+        target = 1f
+        opacity = 0.7f
+        finishing = true
+        finishStart = SystemClock.uptimeMillis() - 60
+        tick()
+    }
+
     fun reset() {
         active = false
         finishing = false
@@ -301,6 +313,42 @@ class AuroraBackdrop @JvmOverloads constructor(context: Context, attrs: Attribut
     }
 }
 
+/** A little firework of ring-coloured dots, for moments worth celebrating (bookmarking). */
+class BurstView @JvmOverloads constructor(context: Context, attrs: AttributeSet? = null) : View(context, attrs) {
+    private val colors = ringColors(context)
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var t = -1f
+
+    init {
+        isClickable = false
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    fun play() {
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 520
+            interpolator = Motion.ease
+            addUpdateListener { t = it.animatedValue as Float; invalidate() }
+            doOnEnd { t = -1f; invalidate() }
+            start()
+        }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        if (t < 0f) return
+        val cx = width / 2f
+        val cy = height / 2f
+        val n = 8
+        for (i in 0 until n) {
+            val a = (i * 2 * PI / n - PI / 2).toFloat()
+            val r = 8f.dp + 13f.dp * t
+            paint.color = colors[i % (colors.size - 1)]
+            paint.alpha = ((1f - t) * 255).toInt().coerceIn(0, 255)
+            canvas.drawCircle(cx + cos(a) * r, cy + sin(a) * r, 2.6f.dp * (1f - t * 0.7f), paint)
+        }
+    }
+}
+
 /** The tab counter: a rounded square holding the number of open tabs, like desktop Dot. */
 class TabCountView @JvmOverloads constructor(context: Context, attrs: AttributeSet? = null) : View(context, attrs) {
     private val box = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -326,6 +374,13 @@ class TabCountView @JvmOverloads constructor(context: Context, attrs: AttributeS
             scaleX = 0.7f; scaleY = 0.7f
             animate().scaleX(1f).scaleY(1f).setDuration(Motion.SLOW).setInterpolator(Motion.spring).start()
         }
+    }
+
+    /** A springy nudge, e.g. when something lands in it. */
+    fun bump() {
+        animate().cancel()
+        scaleX = 1.28f; scaleY = 1.28f
+        animate().scaleX(1f).scaleY(1f).setDuration(Motion.SLOW + 80).setInterpolator(Motion.spring).start()
     }
 
     override fun onDraw(canvas: Canvas) {

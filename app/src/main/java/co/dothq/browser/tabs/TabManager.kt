@@ -199,6 +199,41 @@ class TabManager(private val app: DotApp) {
         return session
     }
 
+    /** A tab with a live, loading session that isn't in the strip (link peek previews). */
+    fun createPreview(url: String, private: Boolean): Tab {
+        val tab = Tab(nextId++, private)
+        tab.url = url
+        tab.preview = true
+        val s = GeckoSession(settingsFor(tab))
+        wire(tab, s)
+        // Previews can't pop dialogs or ask for permissions; Gecko's defaults dismiss/deny.
+        s.promptDelegate = null
+        s.permissionDelegate = null
+        s.open(app.runtime)
+        tab.session = s
+        s.loadUri(url)
+        return tab
+    }
+
+    /** Brings a preview into the strip after [parent], live session and all. */
+    fun adoptPreview(tab: Tab, parent: Tab?, select: Boolean) {
+        if (!tab.preview) return
+        tab.preview = false
+        tab.parentId = parent?.id
+        tab.session?.let { ui?.installWindowDelegates(it) }
+        val at = if (parent != null) tabs.indexOf(parent) + 1 else tabs.size
+        tabs.add(at.coerceIn(0, tabs.size), tab)
+        if (select) select(tab) else tab.session?.setActive(false)
+        ui?.onTabsChanged()
+        scheduleSave()
+    }
+
+    fun discardPreview(tab: Tab) {
+        if (!tab.preview) return
+        tab.session?.close()
+        tab.session = null
+    }
+
     fun load(tab: Tab, url: String) {
         tab.url = url
         tab.resetPageState()
@@ -253,13 +288,14 @@ class TabManager(private val app: DotApp) {
                     "http", "https", "about", "data", "blob", "file", "resource", "view-source", "moz-extension", "javascript", "chrome",
                 )
                 if (!internal) {
-                    ui?.onOpenExternal(request.uri)
+                    if (!tab.preview) ui?.onOpenExternal(request.uri)
                     return GeckoResult.deny()
                 }
                 return GeckoResult.allow()
             }
 
-            override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession> {
+            override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? {
+                if (tab.preview) return null
                 // target=_blank / window.open: a new tab right after this one, already selected.
                 val child = Tab(nextId++, tab.isPrivate)
                 child.url = uri
@@ -330,19 +366,19 @@ class TabManager(private val app: DotApp) {
             }
 
             override fun onCloseRequest(session: GeckoSession) {
-                close(tab)
+                if (!tab.preview) close(tab)
             }
 
             override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
-                ui?.onFullScreen(tab, fullScreen)
+                if (!tab.preview) ui?.onFullScreen(tab, fullScreen)
             }
 
             override fun onContextMenu(session: GeckoSession, screenX: Int, screenY: Int, element: GeckoSession.ContentDelegate.ContextElement) {
-                ui?.onContextMenu(tab, screenX, screenY, element)
+                if (!tab.preview) ui?.onContextMenu(tab, screenX, screenY, element)
             }
 
             override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
-                ui?.onDownload(tab, response)
+                if (!tab.preview) ui?.onDownload(tab, response)
             }
 
             override fun onCrash(session: GeckoSession) = recover(tab, session)
@@ -355,7 +391,7 @@ class TabManager(private val app: DotApp) {
 
         session.historyDelegate = object : GeckoSession.HistoryDelegate {
             override fun onVisited(session: GeckoSession, url: String, lastVisitedURL: String?, flags: Int): GeckoResult<Boolean> {
-                if (tab.isPrivate || !Urls.isWeb(url)) return GeckoResult.fromValue(false)
+                if (tab.isPrivate || tab.preview || !Urls.isWeb(url)) return GeckoResult.fromValue(false)
                 if (flags and GeckoSession.HistoryDelegate.VISIT_TOP_LEVEL == 0) return GeckoResult.fromValue(false)
                 val skip = GeckoSession.HistoryDelegate.VISIT_REDIRECT_SOURCE or
                     GeckoSession.HistoryDelegate.VISIT_REDIRECT_SOURCE_PERMANENT or
@@ -392,7 +428,7 @@ class TabManager(private val app: DotApp) {
             }
         }
 
-        ui?.installWindowDelegates(session)
+        if (!tab.preview) ui?.installWindowDelegates(session)
     }
 
     private fun selectWhenOpen(child: Tab, tries: Int) {

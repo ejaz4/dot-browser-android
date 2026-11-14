@@ -35,6 +35,8 @@ class Tab(val id: Long, val isPrivate: Boolean) {
     var lastUsed: Long = System.currentTimeMillis()
     /** Opened from another app: Back with no history returns there. */
     var openedExternally: Boolean = false
+    /** A live link preview, not (yet) in the tab strip. Quiet: no history, popups or prompts. */
+    var preview: Boolean = false
 
     val isHome: Boolean get() = Urls.isHome(url)
     val host: String get() = Urls.host(url)

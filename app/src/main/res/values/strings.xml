@@ -31,6 +31,8 @@
     <!-- Context menu -->
     <string name="open_in_new_tab">Open in new tab</string>
     <string name="open_in_private_tab">Open in private tab</string>
+    <string name="opened_in_new_tab">Opened in new tab</string>
+    <string name="switch_tab">Switch</string>
     <string name="copy_link">Copy link</string>
     <string name="share_link">Share link…</string>
     <string name="open_image">Open image in new tab</string>
@@ -138,6 +140,7 @@
     <string name="yesterday">Yesterday</string>
     <string name="earlier">Earlier</string>
     <string name="delete">Delete</string>
+    <string name="remove_shortcut">Remove from shortcuts</string>
     <string name="search_library">Search</string>
 
     <!-- Settings -->

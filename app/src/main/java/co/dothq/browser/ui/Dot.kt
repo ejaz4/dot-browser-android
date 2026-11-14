@@ -219,6 +219,7 @@ fun Context.iconButton(res: Int, tint: Int, p: Palette, boxDp: Int = 44, iconDp:
     FrameLayout(this).apply {
         layoutParams = LinearLayout.LayoutParams(boxDp.dp, boxDp.dp)
         pressable(p, Radius.field)
+        sinkOnPress(0.88f)
         contentDescription = desc
         addView(ImageView(context).apply {
             setImageResource(res)
@@ -252,22 +253,105 @@ fun Drawable?.orTransparent(): Drawable = this ?: ColorDrawable(Color.TRANSPAREN
 
 /* ---- Feel ----------------------------------------------------------------------------------- */
 
+/**
+ * Dot's haptic vocabulary. Each gesture has its own feel:
+ *  tick    – selection changes, toggles, swiping between tabs
+ *  tap     – pressing a button
+ *  confirm – something was created or saved (bookmark, new tab, screenshot)
+ *  heavy   – long-press, picking something up
+ *  reject  – something went away (closing a tab)
+ *  spin    – a flourish (the ring)
+ *  soft    – a whisper (a slow page finished loading)
+ * On Android 11+ hardware with rich actuators this uses composition primitives; otherwise it
+ * falls back to the platform's feedback constants. Always respects the system haptics setting.
+ */
 object Haptics {
+    private var vibrator: android.os.Vibrator? = null
+    private var rich = false
+    private var richPlus = false
+
+    fun init(c: Context) {
+        if (vibrator != null) return
+        vibrator = if (Build.VERSION.SDK_INT >= 31)
+            (c.getSystemService(android.os.VibratorManager::class.java))?.defaultVibrator
+        else @Suppress("DEPRECATION") c.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+        val v = vibrator ?: return
+        if (Build.VERSION.SDK_INT >= 30) {
+            rich = v.areAllPrimitivesSupported(
+                android.os.VibrationEffect.Composition.PRIMITIVE_CLICK,
+                android.os.VibrationEffect.Composition.PRIMITIVE_TICK,
+                android.os.VibrationEffect.Composition.PRIMITIVE_QUICK_RISE,
+            )
+        }
+        if (Build.VERSION.SDK_INT >= 31) {
+            richPlus = rich && v.areAllPrimitivesSupported(
+                android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK,
+                android.os.VibrationEffect.Composition.PRIMITIVE_THUD,
+                android.os.VibrationEffect.Composition.PRIMITIVE_SPIN,
+            )
+        }
+    }
+
+    private fun enabled(v: View): Boolean = try {
+        android.provider.Settings.System.getInt(v.context.contentResolver, android.provider.Settings.System.HAPTIC_FEEDBACK_ENABLED, 1) != 0
+    } catch (_: Exception) { true }
+
+    /** Plays a composition if the device can; returns false so the caller can fall back. */
+    private fun play(v: View, plus: Boolean = false, build: (android.os.VibrationEffect.Composition) -> Unit): Boolean {
+        if (Build.VERSION.SDK_INT < 30 || !rich || (plus && !richPlus)) return false
+        if (!enabled(v)) return true
+        val vib = vibrator ?: return false
+        return try {
+            val comp = android.os.VibrationEffect.startComposition()
+            build(comp)
+            vib.vibrate(comp.compose())
+            true
+        } catch (_: Exception) { false }
+    }
+
+    private fun fallback(v: View, constant: Int) {
+        v.performHapticFeedback(constant)
+    }
+
     fun tick(v: View) {
-        v.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        if (!play(v) { it.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_TICK, 0.5f) })
+            fallback(v, HapticFeedbackConstants.CLOCK_TICK)
     }
 
     fun tap(v: View) {
-        v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        if (!play(v) { it.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_CLICK, 0.32f) })
+            fallback(v, HapticFeedbackConstants.VIRTUAL_KEY)
     }
 
     fun confirm(v: View) {
-        if (Build.VERSION.SDK_INT >= 30) v.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-        else v.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+        if (!play(v) {
+                it.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_QUICK_RISE, 0.35f)
+                it.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_CLICK, 0.8f, 20)
+            }) fallback(v, if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.CONTEXT_CLICK)
     }
 
     fun heavy(v: View) {
-        v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        if (!play(v, plus = true) { it.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_THUD, 0.6f) })
+            fallback(v, HapticFeedbackConstants.LONG_PRESS)
+    }
+
+    fun reject(v: View) {
+        if (!play(v) {
+                it.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_CLICK, 0.55f)
+                it.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_CLICK, 0.3f, 70)
+            }) fallback(v, if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.REJECT else HapticFeedbackConstants.LONG_PRESS)
+    }
+
+    fun spin(v: View) {
+        if (!play(v, plus = true) {
+                it.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_SPIN, 0.7f)
+                it.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_SPIN, 0.45f, 140)
+            }) fallback(v, HapticFeedbackConstants.LONG_PRESS)
+    }
+
+    /** Only on hardware that can make it subtle; otherwise silence beats a buzz. */
+    fun soft(v: View) {
+        play(v, plus = true) { it.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK, 0.35f) }
     }
 }
 

@@ -91,6 +91,7 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
         if (i >= 0) adapter?.notifyItemChanged(i, "content")
     }
 
+    private var cascadeUntil = 0L
     private var tabsCount: TextView? = null
     private var privateCount: TextView? = null
     private var empty: View? = null
@@ -171,11 +172,7 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
         val selIndex = items.indexOf(switcherHost.tabManager.selected)
         if (selIndex >= 0) rv.scrollToPosition(selIndex)
 
-        if (animateIn) {
-            rv.alpha = 0f
-            rv.translationY = 24f.dp
-            rv.animate().alpha(1f).translationY(0f).setDuration(Motion.SLOW).setInterpolator(Motion.ease).start()
-        }
+        if (animateIn) cascadeUntil = android.os.SystemClock.uptimeMillis() + 500
     }
 
     private fun updateEmpty() {
@@ -272,6 +269,7 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
                 val t = items.removeAt(from)
                 items.add(to, t)
                 adapter?.notifyItemMoved(from, to)
+                Haptics.tick(rv)
                 return true
             }
 
@@ -280,7 +278,7 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
                 if (pos < 0 || pos >= items.size) return
                 val tab = items.removeAt(pos)
                 adapter?.notifyItemRemoved(pos)
-                Haptics.confirm(rv)
+                Haptics.reject(rv)
                 switcherHost.onSwitcherClose(tab)
                 updateHeaderCounts()
                 updateEmpty()
@@ -311,7 +309,9 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
 
     /* ---- Cards ------------------------------------------------------------------------------ */
 
-    private inner class CardHolder(val frame: FrameLayout) : RecyclerView.ViewHolder(frame) {
+    private inner class CardHolder(val outer: FrameLayout) : RecyclerView.ViewHolder(outer) {
+        /** The visual card; animated separately so RecyclerView's item animator can't cut it short. */
+        val frame = FrameLayout(outer.context)
         val card: LinearLayout
         val favicon: ImageView
         val title: TextView
@@ -320,8 +320,9 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
         val placeholder: FrameLayout
 
         init {
-            val c = frame.context
-            frame.layoutParams = RecyclerView.LayoutParams(MATCH, WRAP).apply { setMargins(5.dp, 5.dp, 5.dp, 5.dp) }
+            val c = outer.context
+            outer.layoutParams = RecyclerView.LayoutParams(MATCH, WRAP).apply { setMargins(5.dp, 5.dp, 5.dp, 5.dp) }
+            outer.addView(frame, flp(MATCH, WRAP))
             frame.setPadding(3.dp, 3.dp, 3.dp, 3.dp)
             card = LinearLayout(c).apply {
                 orientation = LinearLayout.VERTICAL
@@ -386,15 +387,26 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
                     if (tab.isPrivate) c.icon(R.drawable.ic_private, p.text3, 36)
                     else DotRingView(c).apply { halo = false; spinning = false }
                 } else ImageView(c).apply { bindFavicon(tab.favicon, tab.host) }
-                h.placeholder.setBackgroundColor(if (tab.isHome) p.bg else p.field)
+                h.placeholder.setBackgroundColor(p.surface)
                 h.placeholder.addView(mark, flp(40.dp, 40.dp, Gravity.CENTER))
             }
 
-            h.frame.setOnClickListener { switcherHost.onSwitcherPick(tab) }
+            if (android.os.SystemClock.uptimeMillis() < cascadeUntil) {
+                h.frame.alpha = 0f
+                h.frame.translationY = 22f.dp
+                h.frame.scaleX = 0.96f; h.frame.scaleY = 0.96f
+                h.frame.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
+                    .setStartDelay(position * 38L).setDuration(Motion.SLOW).setInterpolator(Motion.ease).start()
+            }
+            h.frame.setOnClickListener {
+                // The chosen card swells toward you, then the page takes over.
+                h.frame.animate().scaleX(1.05f).scaleY(1.05f).setDuration(Motion.FAST).setInterpolator(Motion.ease)
+                    .withEndAction { switcherHost.onSwitcherPick(tab) }.start()
+            }
             h.close.setOnClickListener {
                 val pos = h.bindingAdapterPosition
                 if (pos < 0) return@setOnClickListener
-                Haptics.tap(it)
+                Haptics.reject(it)
                 items.removeAt(pos)
                 notifyItemRemoved(pos)
                 switcherHost.onSwitcherClose(tab)

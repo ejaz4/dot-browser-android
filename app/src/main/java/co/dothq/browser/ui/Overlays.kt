@@ -42,6 +42,8 @@ sealed class MenuEntry {
 
     data class Nav(val buttons: List<NavButton>) : MenuEntry()
     data class Header(val title: String, val subtitle: String? = null, val icon: android.graphics.Bitmap? = null) : MenuEntry()
+    /** A tinted status line with an icon (the privacy summary at the top of the menu). */
+    data class Status(val icon: Int, val text: String, val tint: Int, val onClick: () -> Unit) : MenuEntry()
     data object Separator : MenuEntry()
 }
 
@@ -51,6 +53,8 @@ data class NavButton(
     val enabled: Boolean = true,
     val active: Boolean = false,
     val activeIcon: Int? = null,
+    /** Celebrate turning this on (bookmarking) before the menu closes. */
+    val celebrate: Boolean = false,
     val onClick: () -> Unit,
 )
 
@@ -153,6 +157,16 @@ class DotMenu(private val host: FrameLayout, private val p: Palette) {
         box.scaleX = 0.88f
         box.scaleY = 0.88f
         box.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(Motion.NORMAL + 40).setInterpolator(Motion.spring).start()
+        // Rows cascade in from the anchor side.
+        val fromBelow = pivotY > 0f
+        for (i in 0 until list.childCount) {
+            val row = list.getChildAt(i)
+            val order = if (fromBelow) list.childCount - 1 - i else i
+            row.alpha = 0f
+            row.translationY = (if (fromBelow) 8f else -8f).dp
+            row.animate().alpha(1f).translationY(0f).setStartDelay(30L + order * 14L)
+                .setDuration(Motion.NORMAL).setInterpolator(Motion.ease).start()
+        }
         scrimView.animate().alpha(1f).setDuration(Motion.NORMAL)
             .setUpdateListener { onScrim?.invoke(withAlpha(dim, scrimView.alpha * android.graphics.Color.alpha(dim) / 255f)) }.start()
         Haptics.tick(host)
@@ -209,12 +223,44 @@ class DotMenu(private val host: FrameLayout, private val p: Palette) {
                 btn.layoutParams = lp(0, 48.dp, 1f)
                 btn.isEnabled = b.enabled
                 btn.setOnClickListener {
-                    Haptics.tap(it)
-                    dismiss()
-                    b.onClick()
+                    if (b.celebrate && !b.active && b.activeIcon != null) {
+                        // Fill the star, burst, then close.
+                        Haptics.confirm(it)
+                        val iv = btn.iconView
+                        iv.setImageResource(b.activeIcon)
+                        iv.tint(p.accent)
+                        iv.scaleX = 0.5f; iv.scaleY = 0.5f
+                        iv.animate().scaleX(1f).scaleY(1f).setDuration(Motion.SLOW).setInterpolator(Motion.spring).start()
+                        val burst = BurstView(c)
+                        btn.addView(burst, flp(MATCH, MATCH))
+                        burst.play()
+                        btn.isEnabled = false
+                        btn.postDelayed({ dismiss(); b.onClick() }, 460)
+                    } else {
+                        Haptics.tap(it)
+                        dismiss()
+                        b.onClick()
+                    }
                 }
                 addView(btn)
             }
+        }
+
+        is MenuEntry.Status -> LinearLayout(c).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = lp(MATCH, 40.dp).margins(l = 8.dp, r = 8.dp, t = 4.dp, b = 2.dp)
+            setPadding(10.dp, 0, 10.dp, 0)
+            background = ripple(p.ripple, Radius.small + 2.dp, rounded(withAlpha(e.tint, 0.1f), Radius.small + 2.dp))
+            isClickable = true
+            addView(c.icon(e.icon, e.tint, 16).apply { (layoutParams as LinearLayout.LayoutParams).marginEnd = 10.dp })
+            addView(c.label(e.text, 13f, e.tint, bold = true).apply {
+                layoutParams = lp(0, WRAP, 1f)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            })
+            addView(c.icon(R.drawable.ic_chevron_right, e.tint, 12))
+            setOnClickListener { Haptics.tap(it); dismiss(); e.onClick() }
         }
 
         is MenuEntry.Header -> LinearLayout(c).apply {
@@ -262,13 +308,15 @@ class DotMenu(private val host: FrameLayout, private val p: Palette) {
                     setOnClickListener {
                         Haptics.tick(it)
                         sw.setChecked(!sw.checked, true)
-                        postDelayed({ dismiss(); e.onClick() }, 180)
+                        postDelayed({ dismiss(); e.onClick() }, 220)
                     }
+                    sinkOnPress(0.985f)
                     return@apply
                 }
                 e.chevron -> addView(c.icon(R.drawable.ic_chevron_right, p.text3, 14))
                 e.hint != null -> addView(c.label(e.hint, 13f, p.text3))
             }
+            sinkOnPress(0.985f)
             setOnClickListener {
                 Haptics.tap(it)
                 if (!e.keepOpen) dismiss()
@@ -363,6 +411,9 @@ class Sheet(private val host: FrameLayout, private val p: Palette) {
         box.post {
             box.translationY = box.height.toFloat()
             box.animate().translationY(0f).setDuration(Motion.SLOW).setInterpolator(Motion.ease).start()
+            content.alpha = 0f
+            content.translationY = 14f.dp
+            content.animate().alpha(1f).translationY(0f).setStartDelay(90).setDuration(Motion.SLOW).setInterpolator(Motion.ease).start()
         }
         s.animate().alpha(1f).setDuration(Motion.NORMAL)
             .setUpdateListener { onScrim?.invoke(withAlpha(dim, s.alpha * android.graphics.Color.alpha(dim) / 255f)) }.start()
@@ -411,6 +462,30 @@ class Sheet(private val host: FrameLayout, private val p: Palette) {
     }
 }
 
+data class SheetAction(val icon: Int, val label: String, val danger: Boolean = false, val onClick: () -> Unit)
+
+/** Big, thumb-sized action rows grouped in a rounded card — built for fingers, not cursors. */
+fun actionList(c: Context, p: Palette, actions: List<SheetAction>): View = LinearLayout(c).apply {
+    orientation = LinearLayout.VERTICAL
+    background = rounded(p.field, 16f.dp)
+    clipToOutline = true
+    actions.forEachIndexed { i, a ->
+        if (i > 0) addView(View(c).apply { setBackgroundColor(withAlpha(p.text, if (p.isDark) 0.08f else 0.06f)) }, lp(MATCH, 1).margins(l = 54.dp))
+        val tint = if (a.danger) c.col(R.color.dot_danger) else p.icon
+        addView(LinearLayout(c).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = 56.dp
+            setPadding(18.dp, 0, 18.dp, 0)
+            background = ripple(p.ripple, 0f)
+            isClickable = true
+            addView(c.icon(a.icon, tint, 20).apply { (layoutParams as LinearLayout.LayoutParams).marginEnd = 16.dp })
+            addView(c.label(a.label, 16f, if (a.danger) tint else p.text).apply { layoutParams = lp(0, WRAP, 1f) })
+            setOnClickListener { Haptics.tap(it); a.onClick() }
+        }, lp(MATCH, WRAP))
+    }
+}
+
 /** A titled list of choices inside a sheet, with a check on the selected one. */
 fun choiceList(
     c: Context, p: Palette, title: String, options: List<Pair<String, String?>>, selected: Int, onPick: (Int) -> Unit,
@@ -435,8 +510,15 @@ fun choiceList(
                     setLineSpacing(2f.dp, 1f)
                 })
             })
-            addView(c.icon(R.drawable.ic_check, if (i == selected) p.accent else 0, 18))
-            setOnClickListener { Haptics.tick(it); onPick(i) }
+            val check = c.icon(R.drawable.ic_check, if (i == selected) p.accent else 0, 18)
+            addView(check)
+            setOnClickListener {
+                Haptics.tick(it)
+                check.tint(p.accent)
+                check.scaleX = 0.4f; check.scaleY = 0.4f
+                check.animate().scaleX(1f).scaleY(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.spring).start()
+                postDelayed({ onPick(i) }, 140)
+            }
         })
     }
 }
@@ -481,8 +563,9 @@ class DotToast(private val host: FrameLayout) {
         host.addView(pill, lp)
         current = pill
         pill.alpha = 0f
-        pill.translationY = if (topOffset > 0) -12f.dp else 12f.dp
-        pill.animate().alpha(1f).translationY(0f).setDuration(Motion.NORMAL).setInterpolator(Motion.ease).start()
+        pill.scaleX = 0.94f; pill.scaleY = 0.94f
+        pill.translationY = if (topOffset > 0) -16f.dp else 16f.dp
+        pill.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(Motion.SLOW).setInterpolator(Motion.spring).start()
         host.removeCallbacks(hide)
         host.postDelayed(hide, if (action != null) 4500 else 2800)
     }
@@ -492,6 +575,7 @@ class DotToast(private val host: FrameLayout) {
         current = null
         host.removeCallbacks(hide)
         if (immediate) host.removeView(v)
-        else v.animate().alpha(0f).setDuration(Motion.NORMAL).withEndAction { host.removeView(v) }.start()
+        else v.animate().alpha(0f).translationY(8f.dp).scaleX(0.97f).scaleY(0.97f).setDuration(Motion.NORMAL)
+            .setInterpolator(Motion.easeIn).withEndAction { host.removeView(v) }.start()
     }
 }
