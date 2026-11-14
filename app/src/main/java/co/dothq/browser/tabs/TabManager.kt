@@ -319,6 +319,7 @@ class TabManager(private val app: DotApp) {
             override fun onPageStart(session: GeckoSession, url: String) {
                 tab.loading = true
                 tab.progress = 5
+                tab.scrollY = 0
                 tab.resetPageState()
                 notify(tab, Change.LOADING)
                 notify(tab, Change.TRACKERS)
@@ -413,6 +414,12 @@ class TabManager(private val app: DotApp) {
                     result.complete(out)
                 }
                 return result
+            }
+        }
+
+        session.scrollDelegate = object : GeckoSession.ScrollDelegate {
+            override fun onScrollChanged(session: GeckoSession, scrollX: Int, scrollY: Int) {
+                tab.scrollY = scrollY
             }
         }
 

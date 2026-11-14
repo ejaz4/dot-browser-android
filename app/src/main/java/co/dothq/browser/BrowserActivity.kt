@@ -86,7 +86,8 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
     private lateinit var root: FrameLayout
     private lateinit var column: LinearLayout
     private lateinit var content: FrameLayout
-    private lateinit var gecko: GeckoView
+    private lateinit var gecko: co.dothq.browser.ui.DotGeckoView
+    private lateinit var refresh: co.dothq.browser.ui.RefreshLayout
     private lateinit var ntp: NewTabPage
     private lateinit var toolbar: ToolbarView
     private lateinit var toolbarSlot: FrameLayout
@@ -166,8 +167,12 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         root = FrameLayout(this)
         column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content = FrameLayout(this)
-        gecko = GeckoView(this)
-        content.addView(gecko, flp(MATCH, MATCH))
+        gecko = co.dothq.browser.ui.DotGeckoView(this).apply { atTop = { (selected()?.scrollY ?: 0) <= 0 } }
+        refresh = co.dothq.browser.ui.RefreshLayout(this, gecko, palette()).apply {
+            refreshEnabled = { selected()?.isHome == false && !fullScreen && !switcher.isShowing }
+            onRefresh = { selected()?.session?.reload() }
+        }
+        content.addView(refresh, flp(MATCH, MATCH))
         ntp = NewTabPage(this, app, this)
         content.addView(ntp, flp(MATCH, MATCH))
         toolbar = ToolbarView(this).also { it.listener = this }
@@ -323,6 +328,7 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         val modeChanged = palette?.isPrivate != p.isPrivate || force
         palette = p
         root.setBackgroundColor(p.bg)
+        refresh.setPalette(p)
         toolbar.applyPalette(p, app.prefs.toolbarAtBottom)
         setSystemBars(if (switcher.isShowing) p.frame else p.bg, p.isDark)
         if (modeChanged) ntp.bind(p, tab.isPrivate)

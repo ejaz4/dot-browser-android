@@ -286,10 +286,16 @@ class ToolbarView(context: Context) : LinearLayout(context) {
         cancel.setOnClickListener { Haptics.tap(it); listener?.onCancelEdit() }
 
         edit.setOnEditorActionListener { _, actionId, event ->
-            val enter = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
-            if (actionId == EditorInfo.IME_ACTION_GO || enter) {
-                listener?.onSubmit(edit.text.toString()); true
-            } else false
+            when {
+                // Hardware Enter: swallow the whole press and submit on key-up, so the key-up can't
+                // land on whatever takes focus next (a shortcut tile, the menu button...).
+                event?.keyCode == KeyEvent.KEYCODE_ENTER -> {
+                    if (event.action == KeyEvent.ACTION_UP) listener?.onSubmit(edit.text.toString())
+                    true
+                }
+                actionId == EditorInfo.IME_ACTION_GO -> { listener?.onSubmit(edit.text.toString()); true }
+                else -> false
+            }
         }
         edit.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit

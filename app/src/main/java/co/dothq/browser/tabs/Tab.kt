@@ -16,6 +16,8 @@ class Tab(val id: Long, val isPrivate: Boolean) {
     var canGoBack: Boolean = false
     var canGoForward: Boolean = false
     var desktopMode: Boolean = false
+    /** Vertical scroll position of the page, in CSS pixels. */
+    var scrollY: Int = 0
 
     /** Trackers stopped on the current page, by unique host. */
     val blockedHosts = LinkedHashSet<String>()
