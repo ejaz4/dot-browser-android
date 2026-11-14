@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from dot-icons/Desktop.svg -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16"
+    android:tint="@color/dot_icon">
+    <path
+        android:pathData="M2.5 2.5H13.5C14.05 2.5 14.5 2.95 14.5 3.5V10.5C14.5 11.05 14.05 11.5 13.5 11.5H2.5C1.95 11.5 1.5 11.05 1.5 10.5V3.5C1.5 2.95 1.95 2.5 2.5 2.5Z"
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M8 11.5V14.5"
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M5 14.5H11"
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

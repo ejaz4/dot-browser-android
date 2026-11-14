@@ -1,4 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Dot design tokens, taken from the desktop dark theme (themes/default_themes/dark). -->
 <resources>
-    <color name="blue_dark">#1757B6</color>
+    <color name="dot_bg">#1A1A1A</color>
+    <color name="dot_frame">#101010</color>
+    <color name="dot_surface">#242424</color>
+    <color name="dot_field">#2B2B2B</color>
+    <color name="dot_field_pressed">#343434</color>
+    <color name="dot_border">#303035</color>
+    <color name="dot_divider">#2A2A2D</color>
+    <color name="dot_text">#F3F3F3</color>
+    <color name="dot_text_secondary">#A3A5A8</color>
+    <color name="dot_text_tertiary">#6F7174</color>
+    <color name="dot_icon">#F2F2F2</color>
+    <color name="dot_icon_disabled">#4E4E4E</color>
+    <color name="dot_accent">#4C8DFF</color>
+    <color name="dot_shield">#9D80FF</color>
+    <color name="dot_ripple">#1AFFFFFF</color>
+    <color name="dot_scrim">#59000000</color>
+    <color name="dot_danger">#FF6369</color>
+    <color name="dot_ink">#F5F5F5</color>
+    <color name="dot_on_ink">#0B0F19</color>
+    <color name="dot_shadow">#66000000</color>
 </resources>

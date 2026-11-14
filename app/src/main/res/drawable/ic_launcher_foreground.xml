@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Dot HQ ring. 108dp adaptive canvas; the ring sits inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M54,36.75 A17.25,17.25 0 1,1 53.99,36.75 Z"
+        android:strokeWidth="13.5"
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="sweep"
+                android:centerX="54"
+                android:centerY="54">
+                <item android:offset="0.0" android:color="@color/ring_1" />
+                <item android:offset="0.125" android:color="@color/ring_2" />
+                <item android:offset="0.25" android:color="@color/ring_3" />
+                <item android:offset="0.375" android:color="@color/ring_4" />
+                <item android:offset="0.5" android:color="@color/ring_5" />
+                <item android:offset="0.625" android:color="@color/ring_6" />
+                <item android:offset="0.75" android:color="@color/ring_7" />
+                <item android:offset="0.875" android:color="@color/ring_8" />
+                <item android:offset="1.0" android:color="@color/ring_1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

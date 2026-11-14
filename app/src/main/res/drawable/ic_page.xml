@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from dot-icons/Page.svg -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16"
+    android:tint="@color/dot_icon">
+    <path
+        android:pathData="M4.5 2C4.22386 2 4 2.22386 4 2.5V13.5C4 13.7761 4.22386 14 4.5 14H11.5C11.7761 14 12 13.7761 12 13.5V7H8.5C7.67157 7 7 6.32843 7 5.5V2H4.5ZM8 2.70711L11.2929 6H8.5C8.22386 6 8 5.77614 8 5.5V2.70711ZM3 2.5C3 1.67157 3.67157 1 4.5 1H7.5C7.63261 1 7.75979 1.05268 7.85355 1.14645L12.8536 6.14645C12.9473 6.24021 13 6.36739 13 6.5V13.5C13 14.3284 12.3284 15 11.5 15H4.5C3.67157 15 3 14.3284 3 13.5V2.5Z"
+        android:fillColor="@android:color/white"
+        android:fillType="evenOdd" />
+</vector>

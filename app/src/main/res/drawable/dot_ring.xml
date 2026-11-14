@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Dot HQ ring as a 24dp mark for inline use. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M12,4.5 A7.5,7.5 0 1,1 11.99,4.5 Z"
+        android:strokeWidth="6"
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="sweep"
+                android:centerX="12"
+                android:centerY="12">
+                <item android:offset="0.0" android:color="@color/ring_1" />
+                <item android:offset="0.125" android:color="@color/ring_2" />
+                <item android:offset="0.25" android:color="@color/ring_3" />
+                <item android:offset="0.375" android:color="@color/ring_4" />
+                <item android:offset="0.5" android:color="@color/ring_5" />
+                <item android:offset="0.625" android:color="@color/ring_6" />
+                <item android:offset="0.75" android:color="@color/ring_7" />
+                <item android:offset="0.875" android:color="@color/ring_8" />
+                <item android:offset="1.0" android:color="@color/ring_1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from dot-icons/StarFilled.svg -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16"
+    android:tint="@color/dot_icon">
+    <path
+        android:pathData="M7.31946 1.43353C7.58798 0.853868 8.41198 0.85386 8.68051 1.43352L10.7959 6.00003H14.25C14.9707 6.00003 15.2766 6.91757 14.7 7.35003L11.5733 9.69507L12.784 14.0456C12.9762 14.7362 12.1828 15.277 11.6102 14.8457L7.99998 12.126L4.38982 14.8457C3.81723 15.277 3.0238 14.7362 3.216 14.0456L4.42671 9.69507L1.29999 7.35003C0.723385 6.91758 1.02923 6.00003 1.74999 6.00003H5.20402L7.31946 1.43353Z"
+        android:fillColor="@android:color/white" />
+</vector>

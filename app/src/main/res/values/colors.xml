@@ -1,4 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Dot design tokens, taken from the desktop light theme (themes/default_themes/light). -->
 <resources>
-    <color name="blue_dark">#1757B6</color>
+    <color name="dot_bg">#FFFFFF</color>
+    <color name="dot_frame">#F3F3F3</color>
+    <color name="dot_surface">#FFFFFF</color>
+    <color name="dot_field">#F3F3F3</color>
+    <color name="dot_field_pressed">#E9E9E9</color>
+    <color name="dot_border">#E7E7E7</color>
+    <color name="dot_divider">#EDEDED</color>
+    <color name="dot_text">#18191A</color>
+    <color name="dot_text_secondary">#6B6D70</color>
+    <color name="dot_text_tertiary">#A0A2A5</color>
+    <color name="dot_icon">#1A1A1A</color>
+    <color name="dot_icon_disabled">#C4C4C4</color>
+    <color name="dot_accent">#256EF5</color>
+    <color name="dot_shield">#6A35FF</color>
+    <color name="dot_ripple">#12000000</color>
+    <color name="dot_scrim">#1F000000</color>
+    <color name="dot_danger">#E5484D</color>
+    <color name="dot_ink">#0B0F19</color>
+    <color name="dot_on_ink">#FFFFFF</color>
+    <color name="dot_shadow">#24000000</color>
+
+    <!-- Brand ring (the Dot HQ mark), clockwise from 3 o'clock. -->
+    <color name="ring_1">#1FB364</color>
+    <color name="ring_2">#16B3A3</color>
+    <color name="ring_3">#2D8FE0</color>
+    <color name="ring_4">#6A5CE0</color>
+    <color name="ring_5">#E0526E</color>
+    <color name="ring_6">#F2893A</color>
+    <color name="ring_7">#E9C230</color>
+    <color name="ring_8">#8CC63F</color>
+
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
 </resources>

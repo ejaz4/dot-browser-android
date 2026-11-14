@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_tab"
+        android:enabled="true"
+        android:icon="@drawable/shortcut_new_tab"
+        android:shortcutShortLabel="@string/new_tab">
+        <intent
+            android:action="co.dothq.browser.NEW_TAB"
+            android:targetClass="co.dothq.browser.BrowserActivity"
+            android:targetPackage="co.dothq.browser" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="new_private_tab"
+        android:enabled="true"
+        android:icon="@drawable/shortcut_private_tab"
+        android:shortcutShortLabel="@string/new_private_tab">
+        <intent
+            android:action="co.dothq.browser.NEW_PRIVATE_TAB"
+            android:targetClass="co.dothq.browser.BrowserActivity"
+            android:targetPackage="co.dothq.browser" />
+    </shortcut>
+</shortcuts>
