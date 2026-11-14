@@ -51,6 +51,10 @@ class Prefs(context: Context) {
         get() = p.getLong("dot.stats.trackers_stopped", 0L)
         set(v) = p.edit { putLong("dot.stats.trackers_stopped", v) }
 
+    var shakeToSummarise: Boolean
+        get() = p.getBoolean("dot.ai.shake", true)
+        set(v) = p.edit { putBoolean("dot.ai.shake", v) }
+
     var savedTabs: String?
         get() = p.getString("dot.tabs.saved", null)
         set(v) = p.edit { putString("dot.tabs.saved", v) }

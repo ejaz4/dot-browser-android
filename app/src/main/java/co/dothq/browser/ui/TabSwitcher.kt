@@ -468,14 +468,17 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
             val selected = tab === switcherHost.tabManager.selected
             h.frame.background = if (selected) RingBorder(c, Radius.card + 3.dp, 2.25f.dp) else null
             h.title.text = tab.displayTitle(c.getString(if (tab.isPrivate) R.string.private_tab_title else R.string.new_tab_title))
-            if (tab.isHome) {
+            if (tab.chat) {
+                h.favicon.setImageResource(R.drawable.dot_ring)
+                h.favicon.imageTintList = null
+            } else if (tab.isHome) {
                 h.favicon.setImageResource(if (tab.isPrivate) R.drawable.ic_private else R.drawable.dot_ring)
                 h.favicon.imageTintList = if (tab.isPrivate) android.content.res.ColorStateList.valueOf(p.icon) else null
             } else h.favicon.bindFavicon(tab.favicon, tab.host)
 
             val shot = tab.thumbnail
             h.placeholder.removeAllViews()
-            if (shot != null) {
+            if (shot != null && (!tab.isHome || tab.chat)) {
                 h.thumb.visibility = View.VISIBLE
                 h.thumb.setImageBitmap(shot)
             } else {

@@ -74,6 +74,9 @@
         <activity
             android:name=".ExtensionsActivity"
             android:exported="false" />
+        <activity
+            android:name=".AssistantActivity"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

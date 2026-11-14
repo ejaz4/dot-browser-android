@@ -20,6 +20,7 @@ class DotApp : Application() {
     val tabs: TabManager by lazy { TabManager(this) }
     val extensions: co.dothq.browser.core.ExtensionManager by lazy { co.dothq.browser.core.ExtensionManager(this) }
     val bridge: co.dothq.browser.ai.PageBridge by lazy { co.dothq.browser.ai.PageBridge(this) }
+    val assistant: co.dothq.browser.ai.Assistant by lazy { co.dothq.browser.ai.Assistant(this) }
 
     override fun onCreate() {
         super.onCreate()

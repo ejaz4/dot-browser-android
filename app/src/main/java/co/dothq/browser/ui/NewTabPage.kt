@@ -21,6 +21,8 @@ import java.util.Calendar
 import java.util.concurrent.Executors
 
 interface NewTabHost {
+    fun ntpAskDot()
+    val ntpAssistantOn: Boolean
     fun ntpOpen(url: String, newTab: Boolean)
     fun ntpSiteMenu(site: Site, anchor: View)
     fun ntpPrivacy()
@@ -141,6 +143,20 @@ class NewTabPage(context: Context, private val app: DotApp, private val cb: NewT
             setPadding(0, 0, 0, 8.dp)
         })
         col.addView(c.label(c.getString(R.string.tagline), 17f, p.text2, tracking = -0.01f))
+        if (cb.ntpAssistantOn) {
+            col.addView(LinearLayout(c).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = ripple(p.ripple, Radius.pill, rounded(withAlpha(p.surface, if (p.isDark) 0.75f else 0.9f), Radius.pill, p.border, 1))
+                setPadding(16.dp, 0, 18.dp, 0)
+                isClickable = true
+                sinkOnPress(0.97f)
+                addView(DotRingView(c).apply { halo = false }, lp(18.dp, 18.dp).margins(r = 10.dp))
+                addView(c.label("Ask Dot anything", 15f, p.text2).apply { layoutParams = lp(0, WRAP, 1f) })
+                addView(c.icon(R.drawable.ic_sparkle, p.accent, 16))
+                setOnClickListener { Haptics.tap(it); cb.ntpAskDot() }
+            }, lp(MATCH, 50.dp).margins(t = 22.dp))
+        }
 
         // Shortcuts
         val g = GridLayout(c).apply {

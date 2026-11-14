@@ -37,6 +37,8 @@ class Tab(val id: Long, val isPrivate: Boolean) {
     var lastUsed: Long = System.currentTimeMillis()
     /** Opened from another app: Back with no history returns there. */
     var openedExternally: Boolean = false
+    /** Showing Dot's chat instead of the page (the page keeps running underneath). */
+    var chat: Boolean = false
     /** A live link preview, not (yet) in the tab strip. Quiet: no history, popups or prompts. */
     var preview: Boolean = false
 
@@ -44,6 +46,7 @@ class Tab(val id: Long, val isPrivate: Boolean) {
     val host: String get() = Urls.host(url)
 
     fun displayTitle(fallbackNew: String): String = when {
+        chat -> if (isHome || title.isBlank()) "Chat" else "Chat · $title"
         isHome -> fallbackNew
         title.isNotBlank() -> title
         else -> Urls.pretty(url)

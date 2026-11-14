@@ -79,7 +79,8 @@ import org.mozilla.geckoview.WebResponse
 import java.util.concurrent.Executors
 
 class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, ToolbarView.Listener,
-    co.dothq.browser.core.ExtensionManager.Ui {
+    co.dothq.browser.core.ExtensionManager.Ui, co.dothq.browser.ui.ChatHost, co.dothq.browser.ui.SummaryHost,
+    android.hardware.SensorEventListener {
 
     private val app get() = application as DotApp
     override val tabManager: TabManager get() = app.tabs
@@ -89,6 +90,8 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
     private lateinit var content: FrameLayout
     private lateinit var gecko: co.dothq.browser.ui.DotGeckoView
     private lateinit var refresh: co.dothq.browser.ui.RefreshLayout
+    private lateinit var chatView: co.dothq.browser.ui.ChatView
+    private var chatBound: Tab? = null
     private lateinit var ntp: NewTabPage
     private lateinit var toolbar: ToolbarView
     private lateinit var toolbarSlot: FrameLayout
@@ -181,6 +184,9 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         content.addView(refresh, flp(MATCH, MATCH))
         ntp = NewTabPage(this, app, this)
         content.addView(ntp, flp(MATCH, MATCH))
+        chatView = co.dothq.browser.ui.ChatView(this, this)
+        chatView.visibility = View.GONE
+        content.addView(chatView, flp(MATCH, MATCH))
         toolbar = ToolbarView(this).also { it.listener = this }
         toolbarSlot = FrameLayout(this)
         toolbarSlot.addView(toolbar, flp(MATCH, WRAP))
@@ -262,6 +268,21 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
             }
         }
         return false
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::gecko.isInitialized) {
+            val sm = getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager
+            sm.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER)?.let {
+                sm.registerListener(this, it, android.hardware.SensorManager.SENSOR_DELAY_GAME)
+            }
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        (getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager).unregisterListener(this)
     }
 
     override fun onStart() {
@@ -377,6 +398,7 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
             ntp.animate().alpha(0f).setDuration(120).withEndAction { ntp.visibility = View.GONE; ntp.alpha = 1f }.start()
         }
         if (showNtp) ntp.refresh()
+        renderChat(tab, animate = false)
         if (!toolbar.editing) toolbar.showUrl(tab.url, tab.isHome, searchQueryOf(tab.url))
         renderIdentity(tab, p)
         toolbar.setTrackers(tab.trackersBlocked, pulse = false)
@@ -389,6 +411,7 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
     private fun renderIdentity(tab: Tab, p: Palette) {
         val url = tab.url
         when {
+            tab.chat -> toolbar.setIdentity(R.drawable.ic_sparkle, p.accent)
             tab.isHome || searchQueryOf(url) != null -> toolbar.setIdentity(R.drawable.ic_search, if (tab.isHome) p.text3 else p.icon)
             url.startsWith("https://") && tab.secure -> toolbar.setIdentity(R.drawable.ic_padlock, p.icon)
             url.startsWith("http://") -> toolbar.setIdentity(R.drawable.ic_padlock_open, col(R.color.dot_danger))
@@ -498,7 +521,10 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
             Change.URL -> {
                 render(tab)
             }
-            Change.PROGRESS -> if (tab.loading) toolbar.aurora.setProgress(tab.progress)
+            Change.PROGRESS -> {
+                if (tab.loading) toolbar.aurora.setProgress(tab.progress)
+                if (tab.chat) chatView.onPageProgress(tab.progress)
+            }
             Change.LOADING -> {
                 toolbar.setLoading(tab.loading)
                 if (tab.loading) {
@@ -543,6 +569,176 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         // Links (and images) get a live preview; media just gets its actions.
         val previewUrl = link ?: src?.takeIf { isImage }
         peek(previewUrl, link ?: src ?: return, title, tab, actions, openLabel = if (link == null && isImage) R.string.open_image else R.string.open_in_new_tab)
+    }
+
+    /* ---- Dot Assistant: chat tabs ----------------------------------------------------------- */
+
+    /** Turns [tab] into a Chat tab, or back into a normal tab. The page keeps running underneath. */
+    fun setChat(tab: Tab, on: Boolean) {
+        if (tab.chat == on) return
+        tab.chat = on
+        tabManager.scheduleSave()
+        if (tab === selected()) {
+            if (toolbar.editing) stopEditing()
+            renderChat(tab, animate = true)
+            renderIdentity(tab, palette())
+        }
+        if (on && !app.assistant.isReady) root.postDelayed({ chatOpenSettings() }, 450)
+    }
+
+    private fun renderChat(tab: Tab, animate: Boolean) {
+        val show = tab.chat
+        if (show) {
+            if (chatBound !== tab) {
+                chatView.unbind()
+                val session = app.assistant.session(tab)
+                session.screen = co.dothq.browser.ai.ScreenSource { t, done ->
+                    if (gecko.session === t.session) captureGecko { bmp -> done(bmp) } else done(null)
+                }
+                chatView.bind(session, palette())
+                chatBound = tab
+            }
+            if (chatView.visibility != View.VISIBLE) {
+                chatView.visibility = View.VISIBLE
+                if (animate) {
+                    // The chat rises over the page, which sinks back a touch.
+                    chatView.translationY = content.height * 0.6f
+                    chatView.alpha = 0f
+                    chatView.animate().translationY(0f).alpha(1f).setDuration(Motion.SLOW + 60).setInterpolator(Motion.ease).start()
+                    refresh.animate().scaleX(0.94f).scaleY(0.94f).alpha(0.6f).setDuration(Motion.SLOW).start()
+                    Haptics.confirm(root)
+                }
+            }
+        } else if (chatView.visibility == View.VISIBLE) {
+            if (animate) {
+                refresh.scaleX = 0.94f; refresh.scaleY = 0.94f
+                refresh.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(Motion.SLOW).setInterpolator(Motion.ease).start()
+                chatView.animate().translationY(content.height * 0.6f).alpha(0f).setDuration(Motion.NORMAL + 40).setInterpolator(Motion.easeIn)
+                    .withEndAction { chatView.visibility = View.GONE; chatView.translationY = 0f; chatView.alpha = 1f }.start()
+                Haptics.tap(root)
+            } else {
+                chatView.visibility = View.GONE
+            }
+        } else {
+            refresh.scaleX = 1f; refresh.scaleY = 1f; refresh.alpha = 1f
+        }
+        if (!show && chatBound != null && chatBound !== tab) {
+            chatView.unbind()
+            chatBound = null
+        }
+    }
+
+    override fun chatShowPage() {
+        selected()?.let { setChat(it, false) }
+    }
+
+    override fun chatModelName(): String? = app.assistant.models.active?.name
+
+    override fun chatCapture(done: (Bitmap?) -> Unit) {
+        val tab = selected() ?: return done(null)
+        if (tab.isHome || gecko.session !== tab.session) return done(null)
+        captureGecko { bmp -> done(bmp?.let { shrink(it) }) }
+    }
+
+    override fun chatOpenSettings() {
+        startActivity(Intent(this, AssistantActivity::class.java))
+    }
+
+    override val chatReady: Boolean get() = app.assistant.isReady
+
+    override fun ntpAskDot() {
+        val tab = selected() ?: return
+        setChat(tab, true)
+        chatView.postDelayed({ chatView.focusInput() }, 380)
+    }
+
+    override val ntpAssistantOn: Boolean get() = app.assistant.isAvailable && app.assistant.models.enabled
+
+    /* ---- Dot Assistant: shake to summarise ---------------------------------------------------- */
+
+    private var shakeSpikes = 0
+    private var lastSpike = 0L
+    private var lastShake = 0L
+
+    override fun onSensorChanged(event: android.hardware.SensorEvent) {
+        val (x, y, z) = Triple(event.values[0], event.values[1], event.values[2])
+        val g = kotlin.math.sqrt(x * x + y * y + z * z) / android.hardware.SensorManager.GRAVITY_EARTH
+        if (g < 2.4f) return
+        val now = android.os.SystemClock.uptimeMillis()
+        shakeSpikes = if (now - lastSpike < 600) shakeSpikes + 1 else 1
+        lastSpike = now
+        if (shakeSpikes >= 2 && now - lastShake > 2500) {
+            lastShake = now
+            shakeSpikes = 0
+            onShake()
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: android.hardware.Sensor?, accuracy: Int) = Unit
+
+    private fun onShake() {
+        if (!app.prefs.shakeToSummarise || summaryCard != null || switcher.isShowing) return
+        val tab = selected() ?: return
+        if (tab.isHome || tab.chat || !Urls.isWeb(tab.url)) return
+        summarizeCurrent()
+    }
+
+    private var summaryCard: co.dothq.browser.ui.SummaryCard? = null
+    private var glow: co.dothq.browser.ui.IntelligenceGlow? = null
+
+    fun summarizeCurrent() {
+        val tab = selected() ?: return
+        if (tab.isHome || summaryCard != null) return
+        if (!app.assistant.isReady) {
+            toast("Set up Dot Assistant to summarise pages", "Set up") { chatOpenSettings() }
+            return
+        }
+        activeMenu?.dismiss(false)
+        Haptics.spin(root)
+        val p = palette()
+        val g = co.dothq.browser.ui.IntelligenceGlow(this)
+        root.addView(g, flp(MATCH, MATCH))
+        glow = g
+        g.begin()
+        // The page takes a small breath as the light arrives.
+        content.animate().scaleX(0.985f).scaleY(0.985f).setDuration(260).setInterpolator(Motion.ease).withEndAction {
+            content.animate().scaleX(1f).scaleY(1f).setDuration(Motion.SLOW).setInterpolator(Motion.spring).start()
+        }.start()
+        val card = co.dothq.browser.ui.SummaryCard(this, p, tab.title, tab.host, this)
+        root.addView(card, flp(MATCH, MATCH))
+        summaryCard = card
+        val bottom = if (app.prefs.toolbarAtBottom && toolbarSlot.visibility == View.VISIBLE) toolbarSlot.height else 0
+        card.show(bottom)
+        app.assistant.summarize(tab,
+            onStage = { s -> if (summaryCard === card) card.setStage(s) },
+            onText = { t -> if (summaryCard === card) card.setText(t) },
+        ) { text, error ->
+            if (summaryCard !== card) return@summarize
+            if (text.isNotBlank()) card.setText(text)
+            card.finish(if (text.isBlank()) error ?: "Couldn't summarise this page" else null)
+            glow?.end { root.removeView(g) }
+            glow = null
+        }
+    }
+
+    override fun summaryAsk(summary: String) {
+        val tab = selected() ?: return
+        app.assistant.session(tab).seed("Summarise this page", summary)
+        setChat(tab, true)
+        chatView.postDelayed({ chatView.focusInput() }, 400)
+    }
+
+    override fun summaryCopy(text: String) {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("Summary", text))
+        if (android.os.Build.VERSION.SDK_INT < 33) toast("Summary copied")
+    }
+
+    override fun summaryDismissed() {
+        summaryCard = null
+        app.assistant.llama.stop()
+        glow?.end { glow?.let { root.removeView(it) } }
+        glow = null
     }
 
     /* ---- Extensions ------------------------------------------------------------------------- */
@@ -849,6 +1045,8 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
                 fullScreen -> tab?.session?.exitFullScreen()
                 findBar != null -> closeFind()
                 toolbar.editing -> stopEditing()
+                summaryCard != null -> summaryCard?.dismiss()
+                tab?.chat == true -> setChat(tab, false)
                 switcher.isShowing -> tab?.let { onSwitcherPick(it) }
                 tab == null -> moveTaskToBack(true)
                 tab.canGoBack -> tab.session?.goBack()
@@ -1079,6 +1277,10 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
                     MenuEntry.Separator,
                     MenuEntry.Item(getString(R.string.new_tab)) { openNewTab(false, centerOf(toolbar.menuButton)) },
                     MenuEntry.Item(getString(R.string.new_private_tab)) { openNewTab(true, centerOf(toolbar.menuButton)) },
+                    MenuEntry.Separator,
+                    if (tab.chat) MenuEntry.Item("Back to the page") { setChat(tab, false) }
+                    else MenuEntry.Item("Ask Dot", hint = "Chat") { setChat(tab, true) },
+                    MenuEntry.Item("Summarise page", enabled = !home && !tab.chat) { summarizeCurrent() },
                     MenuEntry.Separator,
                     MenuEntry.Item(getString(R.string.share_page), chevron = true, enabled = !home) { share(tab.url, tab.title) },
                     MenuEntry.Item(getString(R.string.find_in_page), enabled = !home) { openFind() },
@@ -1461,6 +1663,10 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
 
     /** A picture of what the tab is showing right now: the page, or the new tab page. */
     private fun snapshotPage(tab: Tab, done: (Bitmap?) -> Unit) {
+        if (tab.chat && chatView.visibility == View.VISIBLE) {
+            done(runCatching { chatView.drawToBitmap() }.getOrNull())
+            return
+        }
         if (tab.isHome) {
             done(runCatching { ntp.drawToBitmap() }.getOrNull())
             return

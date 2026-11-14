@@ -527,6 +527,7 @@ class TabManager(private val app: DotApp) {
                 put("url", t.url)
                 put("title", t.title)
                 put("desktop", t.desktopMode)
+                put("chat", t.chat)
                 (t.savedState ?: t.pendingState)?.let { put("state", it) }
                 t.parentId?.let { put("parent", it) }
                 put("used", t.lastUsed)
@@ -550,6 +551,7 @@ class TabManager(private val app: DotApp) {
                 t.url = o.optString("url", "")
                 t.title = o.optString("title", "")
                 t.desktopMode = o.optBoolean("desktop", false)
+                t.chat = o.optBoolean("chat", false)
                 t.pendingState = o.optString("state", "").ifEmpty { null }
                 t.savedState = t.pendingState
                 t.parentId = if (o.has("parent")) o.getLong("parent") else null

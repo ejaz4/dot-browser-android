@@ -24,6 +24,24 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+
+        // The on-device assistant (llama.cpp). 64-bit only: phones that can run a language
+        // model are all 64-bit, and llama.cpp doesn't target 32-bit ARM.
+        externalNativeBuild {
+            cmake {
+                abiFilters 'arm64-v8a', 'x86_64'
+                arguments '-DANDROID_STL=c++_shared', '-DCMAKE_BUILD_TYPE=Release'
+            }
+        }
+    }
+
+    ndkVersion = "30.0.16248370"
+
+    externalNativeBuild {
+        cmake {
+            path = file('src/main/cpp/CMakeLists.txt')
+            version = "3.31.6"
+        }
     }
 
     buildFeatures {

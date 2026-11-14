@@ -84,6 +84,11 @@ class SettingsActivity : AppCompatActivity() {
         render()
     }
 
+    override fun onRestart() {
+        super.onRestart()
+        render()
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (sheet.isShowing) sheet.dismiss() else @Suppress("DEPRECATION") super.onBackPressed()
@@ -120,6 +125,19 @@ class SettingsActivity : AppCompatActivity() {
                     app.applyTheme()
                     app.applyPrivacySettings()
                 }
+            }
+        }
+
+        group("Dot Assistant") {
+            val m = app.assistant.models
+            val state = when {
+                !app.assistant.isAvailable -> "Unavailable"
+                !m.enabled -> "Off"
+                m.active == null -> "Choose a model"
+                else -> m.active!!.name
+            }
+            choice("Assistant", state) {
+                startActivity(android.content.Intent(this@SettingsActivity, AssistantActivity::class.java))
             }
         }
 
