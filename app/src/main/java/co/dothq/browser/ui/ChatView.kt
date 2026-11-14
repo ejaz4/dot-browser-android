@@ -421,6 +421,7 @@ class ChatView(context: Context, private val host: ChatHost) : FrameLayout(conte
             addView(context.label("", 15.5f, p.text).apply {
                 setLineSpacing(4f.dp, 1f)
                 setTextIsSelectable(true)
+                if (android.os.Build.VERSION.SDK_INT >= 26) defaultFocusHighlightEnabled = false
             }, lp(0, WRAP, 1f))
             update(item, this)
         }

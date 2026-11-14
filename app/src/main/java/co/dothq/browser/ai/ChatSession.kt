@@ -155,9 +155,10 @@ class ChatSession(private val assistant: Assistant, private val app: DotApp, val
     private fun buildMessages(forceAnswer: Boolean, withImage: Boolean): List<ChatMessage> {
         val out = mutableListOf(ChatMessage("system", systemPrompt()))
         out += history.takeLast(6)
-        val where = if (tab.isHome) "The tab is on a new tab page (no website open)."
-        else "The tab is showing \"${tab.title.ifBlank { Urls.host(tab.url) }}\" at ${tab.url}."
-        out += ChatMessage("user", "$task\n\n($where)")
+        // Background first, the request last: small models follow the last thing they read.
+        val where = if (tab.isHome) "No website is open yet."
+        else "Background, only if relevant: the tab currently shows \"${tab.title.ifBlank { Urls.host(tab.url) }}\" (${Urls.host(tab.url)})."
+        out += ChatMessage("user", "$where\n\nRequest: $task")
         steps.forEachIndexed { i, (action, obs) ->
             out += ChatMessage("assistant", "<action>$action</action>")
             val last = i == steps.lastIndex
