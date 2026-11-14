@@ -21,6 +21,13 @@ The same private browser you all know and love, rebuilt for Android in the Dot d
 
 **Private by default.** Strict Enhanced Tracking Protection, HTTPS-Only mode, Global Privacy Control, tracking parameters stripped from links, and cross-site cookies isolated per site. The purple shield in the address bar counts trackers stopped on the page; tap it for the breakdown. The new tab page keeps the lifetime total.
 
+**Firefox extensions.** Install from addons.mozilla.org ("Add to Firefox" just works) or from a file. Manage them under menu → Extensions; their toolbar buttons and popups live at the top of the menu.
+
+**Dot Assistant, entirely on your phone.** An on-device language model ([llama.cpp](https://github.com/ggml-org/llama.cpp)) that nothing you ask ever leaves:
+- **Chat tabs**: turn any tab into a chat and back. Ask anything, or have Dot do things on the web for you: it searches, opens, reads, clicks, types and scrolls, showing each step and a live view of the page it's driving. Models with vision can look at the screen itself.
+- **Shake to summarise**: shake your phone on a page; light wraps the screen's edges while a summary streams in.
+- **Pick your model**: ten options from 229 MB (instant) to 3 GB (smartest), including Qwen3.5, Gemma 4, LFM2.5, Phi-4 mini and SmolLM3, with a recommendation for your phone. Downloads are verified by checksum.
+
 **The Dot design language.** The toolbar, the menu (with its navigation row and inset separators) and the tab cards are translated from desktop Dot. Icons come from the Dot icon set, with new ones drawn in the same style in [`design/icons`](design/icons). Light, dark and a deep-violet private palette; toolbar at the bottom or, like desktop, at the top.
 
 **Something a little different.**
@@ -32,9 +39,10 @@ The same private browser you all know and love, rebuilt for Android in the Dot d
 
 ## Building
 
-Requires JDK 17+ and the Android SDK (API 37.2 platform; Gradle fetches it if licences are accepted).
+Requires JDK 17+, the Android SDK (API 37.2 platform), NDK 30.0.16248370 and CMake 3.31.6. llama.cpp is a submodule:
 
 ```bash
+git clone --recurse-submodules https://github.com/ejaz4/dot-browser-android
 ./gradlew assembleDebug
 ```
 
@@ -47,6 +55,9 @@ The APK lands in `app/build/outputs/apk/debug/`. Unit tests: `./gradlew testDebu
 | `app/src/main/java/co/dothq/browser/tabs` | `TabManager` owns every `GeckoSession`; app-scoped, so tabs survive the window |
 | `app/src/main/java/co/dothq/browser/ui` | The Dot UI kit, toolbar, menu, sheets, tab grid, new tab page, transitions, signature visuals |
 | `app/src/main/java/co/dothq/browser/gecko` | Prompts and permissions |
+| `app/src/main/java/co/dothq/browser/ai` | Dot Assistant: model catalog and downloads, the agent behind Chat tabs, the page bridge |
+| `app/src/main/cpp` | The llama.cpp JNI bridge (`dotllm.cpp`) |
+| `app/src/main/assets/dot-agent` | Built-in extension that lets the assistant read and act on pages |
 | `app/src/main/java/co/dothq/browser/core` | Preferences, URLs and search engines, history/bookmarks, favicons, downloads, error pages |
 | `design/icons` | Source SVGs for every icon |
 

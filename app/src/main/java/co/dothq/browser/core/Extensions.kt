@@ -175,7 +175,12 @@ class ExtensionManager(private val app: DotApp) {
 
     private fun remember(ext: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
         main.post {
-            if (session == null) defaultActions[ext.id] = action else tabActions[ext.id to session] = action
+            if (session == null) defaultActions[ext.id] = action
+            else {
+                tabActions[ext.id to session] = action
+                // After a restart Gecko may only send per-tab state; it still means there's a button.
+                defaultActions.putIfAbsent(ext.id, action)
+            }
             action.icon?.getBitmap(ICON_PX)?.accept({ bmp -> if (bmp != null) main.post { actionIcons[ext.id] = bmp; ui?.onExtensionsChanged() } }, { })
             ui?.onExtensionsChanged()
         }

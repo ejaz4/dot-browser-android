@@ -170,7 +170,7 @@ class SummaryCard(context: Context, private val p: Palette, title: String, host:
 
     init {
         card.orientation = LinearLayout.VERTICAL
-        card.background = rounded(withAlpha(p.surface, 0.97f), 26f.dp, withAlpha(p.text, 0.08f), 1)
+        card.background = rounded(p.surface, 26f.dp, withAlpha(p.text, 0.08f), 1)
         card.elevation = 22f.dp
         card.setPadding(20.dp, 16.dp, 20.dp, 14.dp)
         card.isClickable = true

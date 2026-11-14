@@ -135,6 +135,7 @@ class ChatView(context: Context, private val host: ChatHost) : FrameLayout(conte
     private val liveImage = ImageView(context)
     private val liveHalo = AuroraOutline(context)
     private val liveLabel = TextView(context)
+    private val liveStep = ShimmerText(context)
     private val header = LinearLayout(context)
     private val modelChip = TextView(context)
     private val rendered = mutableListOf<Pair<ChatItem, View>>()
@@ -152,6 +153,7 @@ class ChatView(context: Context, private val host: ChatHost) : FrameLayout(conte
         header.gravity = Gravity.CENTER_VERTICAL
         header.setPadding(16.dp, 10.dp, 8.dp, 6.dp)
         column.addView(header, lp(MATCH, WRAP))
+        column.addView(live, lp(MATCH, 0).margins(l = 10.dp, r = 10.dp))
 
         list.orientation = LinearLayout.VERTICAL
         list.setPadding(16.dp, 8.dp, 16.dp, 20.dp)
@@ -172,23 +174,33 @@ class ChatView(context: Context, private val host: ChatHost) : FrameLayout(conte
         composer.gravity = Gravity.CENTER_VERTICAL
         column.addView(composer, lp(MATCH, WRAP).margins(l = 12.dp, r = 12.dp, b = 10.dp))
 
-        // Live view of the page Dot is working on.
+        // "Now browsing": a live view of the page Dot is working on, wrapped in the loading halo.
         live.addView(liveHalo, flp(MATCH, MATCH))
-        val liveCard = FrameLayout(context)
-        liveCard.clipToOutline = true
-        liveImage.scaleType = ImageView.ScaleType.CENTER_CROP
-        liveCard.addView(liveImage, flp(MATCH, MATCH))
-        liveLabel.style(10.5f, 0xFFFFFFFF.toInt(), bold = true)
-        liveLabel.setPadding(8.dp, 3.dp, 8.dp, 4.dp)
-        liveLabel.maxLines = 1
-        liveLabel.ellipsize = TextUtils.TruncateAt.END
-        liveCard.addView(liveLabel, flp(MATCH, WRAP, Gravity.BOTTOM))
+        val liveCard = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(6.dp, 6.dp, 12.dp, 6.dp)
+        }
+        val thumb = FrameLayout(context).apply { clipToOutline = true }
+        liveImage.scaleType = ImageView.ScaleType.MATRIX
+        thumb.addView(liveImage, flp(MATCH, MATCH))
+        liveCard.addView(thumb, lp(66.dp, 46.dp).margins(r = 12.dp))
+        liveCard.addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = lp(0, WRAP, 1f)
+            liveLabel.maxLines = 1
+            liveLabel.ellipsize = TextUtils.TruncateAt.END
+            addView(liveLabel)
+            liveStep.maxLines = 1
+            liveStep.ellipsize = TextUtils.TruncateAt.END
+            liveStep.setPadding(0, 3.dp, 0, 0)
+            addView(liveStep)
+        })
+        liveCard.addView(context.label("Show", 13f, 0, bold = true).apply { tag = "show" })
         val m = liveHalo.glowMargin
         live.addView(liveCard, flp(MATCH, MATCH).margins(m, m, m, m))
         live.visibility = GONE
-        live.elevation = 8f.dp
         live.setOnClickListener { Haptics.tap(it); host.chatShowPage() }
-        addView(live, flp(110.dp + 2 * m, 150.dp + 2 * m, Gravity.TOP or Gravity.END).margins(t = 54.dp - m, r = 12.dp - m))
         liveCard.tag = "card"
     }
 
@@ -201,10 +213,12 @@ class ChatView(context: Context, private val host: ChatHost) : FrameLayout(conte
         backdrop.intensity = if (p.isDark) 0.16f else 0.10f
         liveHalo.cornerRadius = 14f.dp
         liveHalo.setPrivate(p.isPrivate)
-        (live.getChildAt(1) as FrameLayout).background = rounded(p.surface, 14f.dp, p.border, 1)
-        liveLabel.background = android.graphics.drawable.GradientDrawable(
-            android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xB0000000.toInt(), 0x00000000),
-        )
+        val liveCard = live.getChildAt(1) as LinearLayout
+        liveCard.background = rounded(withAlpha(p.surface, 0.96f), 14f.dp, p.border, 1)
+        (liveCard.getChildAt(0) as FrameLayout).background = rounded(p.field, 8f.dp)
+        liveLabel.style(13.5f, p.text, bold = true)
+        liveStep.style(12.5f, p.text2)
+        liveCard.findViewWithTag<TextView>("show").setTextColor(p.accent)
         buildHeader()
         buildComposer()
         buildEmpty()
@@ -252,10 +266,21 @@ class ChatView(context: Context, private val host: ChatHost) : FrameLayout(conte
             style(16f, p.text)
             setHintTextColor(p.text3)
             hint = if (host.chatReady) "Ask Dot anything" else "Set up Dot Assistant to chat"
-            maxLines = 5
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_ACTION_SEND
-            setOnEditorActionListener { _, id, _ -> if (id == EditorInfo.IME_ACTION_SEND) { submit(); true } else false }
+            // Single-line input (so Enter sends) that still wraps as you type.
+            setHorizontallyScrolling(false)
+            maxLines = 5
+            setOnEditorActionListener { _, id, event ->
+                when {
+                    event?.keyCode == android.view.KeyEvent.KEYCODE_ENTER -> {
+                        if (event.action == android.view.KeyEvent.ACTION_UP) submit()
+                        true
+                    }
+                    id == EditorInfo.IME_ACTION_SEND -> { submit(); true }
+                    else -> false
+                }
+            }
         }
         input.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
@@ -459,9 +484,15 @@ class ChatView(context: Context, private val host: ChatHost) : FrameLayout(conte
         override fun run() {
             if (!liveRunning) return
             host.chatCapture { bmp ->
-                if (bmp != null && liveRunning) liveImage.setImageBitmap(bmp)
+                if (bmp != null && liveRunning) {
+                    liveImage.setImageBitmap(bmp)
+                    // Top of the page, scaled to the thumbnail's width.
+                    val s = 66.dp.toFloat() / bmp.width
+                    liveImage.imageMatrix = android.graphics.Matrix().apply { setScale(s, s) }
+                }
             }
-            session?.tab?.let { liveLabel.text = co.dothq.browser.core.Urls.host(it.url).ifEmpty { "New tab" } }
+            session?.tab?.let { liveLabel.text = it.title.ifBlank { co.dothq.browser.core.Urls.host(it.url).ifEmpty { "New tab" } } }
+            liveStep.text = session?.stage ?: "Working"
             postDelayed(this, 1300)
         }
     }
@@ -470,10 +501,9 @@ class ChatView(context: Context, private val host: ChatHost) : FrameLayout(conte
         if (liveRunning) return
         liveRunning = true
         live.visibility = VISIBLE
+        animateLiveHeight(0, 72.dp + 2 * liveHalo.glowMargin)
         live.alpha = 0f
-        live.scaleX = 0.8f; live.scaleY = 0.8f
-        live.pivotX = live.width.toFloat(); live.pivotY = 0f
-        live.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(Motion.SLOW).setInterpolator(Motion.spring).start()
+        live.animate().alpha(1f).setDuration(Motion.SLOW).setInterpolator(Motion.ease).start()
         liveHalo.start()
         post(liveTick)
     }
@@ -483,7 +513,24 @@ class ChatView(context: Context, private val host: ChatHost) : FrameLayout(conte
         liveRunning = false
         removeCallbacks(liveTick)
         liveHalo.finish()
-        live.animate().alpha(0f).scaleX(0.85f).scaleY(0.85f).setDuration(Motion.NORMAL).withEndAction { live.visibility = GONE }.start()
+        live.animate().alpha(0f).setStartDelay(500).setDuration(Motion.NORMAL).withEndAction {
+            animateLiveHeight(live.height, 0) { live.visibility = GONE }
+        }.start()
+    }
+
+    /** The strip grows into place (pushing the conversation down) rather than popping in. */
+    private fun animateLiveHeight(from: Int, to: Int, then: (() -> Unit)? = null) {
+        android.animation.ValueAnimator.ofInt(from, to).apply {
+            duration = Motion.SLOW
+            interpolator = Motion.ease
+            addUpdateListener {
+                live.layoutParams = (live.layoutParams as LinearLayout.LayoutParams).apply { height = it.animatedValue as Int }
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) { then?.invoke() }
+            })
+            start()
+        }
     }
 
     /** Keeps the live halo progress moving with the page. */
