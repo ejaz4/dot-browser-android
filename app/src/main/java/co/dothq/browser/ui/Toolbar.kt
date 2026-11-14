@@ -38,6 +38,10 @@ class ToolbarView(context: Context) : LinearLayout(context) {
         fun onAddressLongPress(anchor: View)
         /** Returns true if there was a tab that way. */
         fun onSwipeTabs(direction: Int): Boolean
+        /** Pulling the address bar into the page, toward the tab grid. Return false to refuse. */
+        fun onPullStart(): Boolean
+        fun onPullProgress(progress: Float)
+        fun onPullEnd(commit: Boolean)
         fun onIdentityTap(anchor: View)
         fun onPillAction()
         fun onTabsTap()
@@ -178,16 +182,44 @@ class ToolbarView(context: Context) : LinearLayout(context) {
         var downY = 0f
         var downT = 0L
         var dragging = false
+        var pulling = false
+        val pullDistance = 230.dp.toFloat()
         pill.setOnTouchListener { v, e ->
             if (editing) return@setOnTouchListener false
+            // "Into the page": down from a top toolbar, up from a bottom one.
+            val into = if (atBottom) -1f else 1f
+            if (pulling) {
+                val pull = (e.rawY - downY) * into
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_MOVE -> listener?.onPullProgress(pull / pullDistance)
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        pulling = false
+                        v.animate().scaleX(1f).scaleY(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.spring).start()
+                        val speed = pull / (e.eventTime - downT).coerceAtLeast(1)
+                        val commit = e.actionMasked == MotionEvent.ACTION_UP &&
+                            (pull / pullDistance > 0.32f || (speed > 0.7f && pull > 36.dp))
+                        listener?.onPullEnd(commit)
+                    }
+                }
+                return@setOnTouchListener true
+            }
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    downX = e.rawX; downY = e.rawY; downT = e.eventTime; dragging = false
+                    downX = e.rawX; downY = e.rawY; downT = e.eventTime; dragging = false; pulling = false
                     v.animate().scaleX(0.985f).scaleY(0.97f).setDuration(Motion.FAST).setInterpolator(Motion.ease).start()
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - downX
                     val dy = e.rawY - downY
+                    if (!dragging && dy * into > slop && abs(dy) > abs(dx) * 1.2f && listener?.onPullStart() == true) {
+                        pulling = true
+                        val cancel = MotionEvent.obtain(e).apply { action = MotionEvent.ACTION_CANCEL }
+                        gestures.onTouchEvent(cancel)
+                        cancel.recycle()
+                        v.animate().scaleX(1f).scaleY(1f).setDuration(Motion.FAST).start()
+                        listener?.onPullProgress(dy * into / pullDistance)
+                        return@setOnTouchListener true
+                    }
                     if (!dragging && abs(dx) > slop && abs(dx) > abs(dy) * 1.4f) {
                         dragging = true
                         val cancel = MotionEvent.obtain(e).apply { action = MotionEvent.ACTION_CANCEL }

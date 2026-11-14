@@ -1243,6 +1243,133 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         }
     }
 
+    /* ---- Pull into the tab grid (3D) -------------------------------------------------------- */
+
+    private class Pull(val tab: Tab, val area: android.graphics.RectF, val backdrop: View) {
+        var card: ImageView? = null
+        var bitmap: Bitmap? = null
+        var snapshotDone = false
+        var progress = 0f
+        var armed = false
+        var ended = false
+        var commit = false
+        var radius = 0f
+    }
+
+    private var pull: Pull? = null
+
+    override fun onPullStart(): Boolean {
+        val tab = selected() ?: return false
+        if (switcher.isShowing || toolbar.editing || pull != null || findBar != null) return false
+        val area = rectIn(content, root)
+        val backdrop = View(this).apply {
+            setBackgroundColor(Palette.of(this@BrowserActivity, tab.isPrivate).frame)
+            alpha = 0f
+        }
+        root.addView(backdrop, flp(area.width().toInt(), area.height().toInt()))
+        backdrop.x = area.left
+        backdrop.y = area.top
+        val state = Pull(tab, area, backdrop)
+        pull = state
+        snapshotPage(tab) { bmp ->
+            state.snapshotDone = true
+            if (pull !== state && !state.ended) return@snapshotPage
+            state.bitmap = bmp
+            if (bmp != null) {
+                val w = area.width().toInt()
+                val h = area.height().toInt()
+                val card = ImageView(this).apply {
+                    scaleType = ImageView.ScaleType.MATRIX
+                    setImageBitmap(bmp)
+                    imageMatrix = android.graphics.Matrix().apply { val s = w.toFloat() / bmp.width; setScale(s, s) }
+                    setBackgroundColor(palette().bg)
+                    clipToOutline = true
+                    outlineProvider = object : android.view.ViewOutlineProvider() {
+                        override fun getOutline(view: View, outline: android.graphics.Outline) {
+                            outline.setRoundRect(0, 0, view.width, view.height, state.radius)
+                        }
+                    }
+                    cameraDistance = 9000f * resources.displayMetrics.density
+                    pivotX = w / 2f
+                    pivotY = if (app.prefs.toolbarAtBottom) h.toFloat() else 0f
+                }
+                root.addView(card, flp(w, h))
+                card.x = area.left
+                card.y = area.top
+                state.card = card
+                applyPull(state)
+            }
+            if (state.ended) finishPull(state)
+        }
+        return true
+    }
+
+    override fun onPullProgress(progress: Float) {
+        val s = pull ?: return
+        s.progress = progress
+        val armed = progress > 0.32f
+        if (armed != s.armed) {
+            s.armed = armed
+            Haptics.tick(root) // you've passed the point of no return (or come back from it)
+        }
+        applyPull(s)
+    }
+
+    override fun onPullEnd(commit: Boolean) {
+        val s = pull ?: return
+        s.ended = true
+        s.commit = commit
+        if (s.snapshotDone) finishPull(s)
+    }
+
+    /** Lays the page back in depth: it tilts, shrinks and drifts with your finger. */
+    private fun applyPull(s: Pull) {
+        val raw = s.progress.coerceAtLeast(0f)
+        // Follows the finger, then resists like a rubber band.
+        val p = if (raw <= 1f) raw else 1f + (raw - 1f) * 0.25f
+        val e = co.dothq.browser.ui.Motion.ease.getInterpolation(p.coerceAtMost(1f)) + (p - p.coerceAtMost(1f))
+        s.backdrop.alpha = (e * 1.3f).coerceIn(0f, 1f)
+        val card = s.card ?: return
+        val into = if (app.prefs.toolbarAtBottom) -1f else 1f
+        val scale = 1f - 0.34f * e
+        card.scaleX = scale
+        card.scaleY = scale
+        card.rotationX = into * 18f * e
+        card.y = s.area.top + into * s.area.height() * 0.1f * e
+        card.elevation = 16f.dp * e.coerceAtMost(1f)
+        s.radius = (24f.dp * e.coerceAtMost(1f)) / scale.coerceAtLeast(0.1f)
+        card.invalidateOutline()
+    }
+
+    private fun finishPull(s: Pull) {
+        if (pull === s) pull = null
+        val card = s.card
+        if (!s.commit || card == null) {
+            // Not far enough: the page springs back to where it belongs.
+            card?.animate()?.scaleX(1f)?.scaleY(1f)?.rotationX(0f)?.y(s.area.top)?.setDuration(Motion.SLOW)
+                ?.setInterpolator(Motion.spring)?.withEndAction { root.removeView(card) }?.start()
+            s.radius = 0f
+            card?.invalidateOutline()
+            s.backdrop.animate().alpha(0f).setDuration(Motion.NORMAL).withEndAction { root.removeView(s.backdrop) }.start()
+            return
+        }
+        Haptics.tap(root)
+        // Straighten up, then fly into its card in the grid.
+        card.animate().rotationX(0f).setDuration(120).setInterpolator(Motion.ease).withEndAction {
+            val sc = card.scaleX
+            val left = card.x + card.pivotX * (1f - sc)
+            val top = card.y + card.pivotY * (1f - sc)
+            val from = android.graphics.RectF(left, top, left + card.width * sc, top + card.height * sc)
+            s.bitmap?.let { tabManager.setThumbnail(s.tab, shrink(it)) }
+            switcher.show(s.tab.isPrivate, s.bitmap, from, fromRadius = s.radius * sc, backgroundFrom = (s.backdrop.alpha * 255).toInt())
+            val p = Palette.of(this, s.tab.isPrivate)
+            setSystemBars(p.frame, p.isDark)
+            ntp.setAnimating(false)
+            root.removeView(card)
+            root.removeView(s.backdrop)
+        }.start()
+    }
+
     /** A picture of what the tab is showing right now: the page, or the new tab page. */
     private fun snapshotPage(tab: Tab, done: (Bitmap?) -> Unit) {
         if (tab.isHome) {

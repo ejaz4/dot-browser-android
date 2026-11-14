@@ -60,7 +60,13 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
      * ([from]), the page shrinks and unwinds into its exact card in the grid while the grid
      * gathers around it.
      */
-    fun show(privateMode: Boolean, snapshot: android.graphics.Bitmap? = null, from: android.graphics.RectF? = null) {
+    fun show(
+        privateMode: Boolean,
+        snapshot: android.graphics.Bitmap? = null,
+        from: android.graphics.RectF? = null,
+        fromRadius: Float = 0f,
+        backgroundFrom: Int = 0,
+    ) {
         if (root != null) return
         private = privateMode
         val r = FrameLayout(host.context).apply { isClickable = true }
@@ -77,7 +83,7 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
 
         // The grid's chrome gathers: background fades in, header drops from above, bar rises.
         val bg = r.background
-        android.animation.ValueAnimator.ofInt(0, 255).apply {
+        android.animation.ValueAnimator.ofInt(backgroundFrom.coerceIn(0, 255), 255).apply {
             duration = Motion.SLOW
             interpolator = Motion.ease
             addUpdateListener { bg?.alpha = it.animatedValue as Int }
@@ -92,7 +98,7 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
             bar.animate().alpha(1f).translationY(0f).setStartDelay(80).setDuration(Motion.SLOW).setInterpolator(Motion.ease).start()
         }
 
-        val ghost = PageGhost.attach(host, snapshot, p.bg, from, from, 0f)
+        val ghost = PageGhost.attach(host, snapshot, p.bg, from, from, fromRadius)
         val rv = recycler ?: return
         rv.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
             override fun onPreDraw(): Boolean {
@@ -106,7 +112,7 @@ class TabSwitcher(private val host: FrameLayout, private val switcherHost: Switc
                     return true
                 }
                 var chromeIn = false
-                flyGhost(ghost, from, target, 0f, 3f.dp, duration = 420, onUpdate = { t ->
+                flyGhost(ghost, from, target, fromRadius, 3f.dp, duration = 420, onUpdate = { t ->
                     // The card's header and ring gather around the page as it lands.
                     if (!chromeIn && t > 0.68f) {
                         chromeIn = true
