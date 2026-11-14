@@ -94,11 +94,13 @@ class TabManager(private val app: DotApp) {
     fun select(tab: Tab) {
         val previous = selected
         if (previous === tab && tab.session != null) return
-        previous?.session?.setActive(false)
+        previous?.session?.let { it.setActive(false); app.runtime.webExtensionController.setTabActive(it, false) }
         selected = tab
         tab.lastUsed = System.currentTimeMillis()
         val session = ensureSession(tab)
         session.setActive(true)
+        // Extensions act on "the current tab" (popups, tabs.query, etc.).
+        app.runtime.webExtensionController.setTabActive(session, true)
         ui?.onSelected(previous, tab)
         scheduleSave()
     }
@@ -151,6 +153,23 @@ class TabManager(private val app: DotApp) {
         }
         ui?.onTabsChanged()
         scheduleSave()
+    }
+
+    /**
+     * A tab whose session Gecko (or an extension) will open itself: placed after [parent],
+     * selected once it's open if [select].
+     */
+    fun newChildTab(parent: Tab?, url: String, select: Boolean, private: Boolean = parent?.isPrivate ?: false): Tab {
+        val child = Tab(nextId++, private)
+        child.url = url
+        child.parentId = parent?.id
+        val s = GeckoSession(settingsFor(child))
+        wire(child, s)
+        child.session = s
+        val at = if (parent != null) tabs.indexOf(parent) + 1 else tabs.size
+        tabs.add(at.coerceIn(0, tabs.size), child)
+        if (select) selectWhenOpen(child, 0) else main.post { ui?.onTabsChanged(); scheduleSave() }
+        return child
     }
 
     /** Moves [tab] to where [target] is (drag to reorder). */
@@ -296,18 +315,8 @@ class TabManager(private val app: DotApp) {
 
             override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? {
                 if (tab.preview) return null
-                // target=_blank / window.open: a new tab right after this one, already selected.
-                val child = Tab(nextId++, tab.isPrivate)
-                child.url = uri
-                child.parentId = tab.id
-                val s = GeckoSession(settingsFor(child))
-                wire(child, s)
-                child.session = s
-                val at = tabs.indexOf(tab) + 1
-                tabs.add(at.coerceIn(0, tabs.size), child)
-                // Gecko opens the session after we hand it back; select once it has.
-                selectWhenOpen(child, 0)
-                return GeckoResult.fromValue(s)
+                // target=_blank / window.open: a new tab right after this one, selected once open.
+                return GeckoResult.fromValue(newChildTab(tab, uri, select = true).session)
             }
 
             override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String> {
@@ -436,6 +445,8 @@ class TabManager(private val app: DotApp) {
         }
 
         if (!tab.preview) ui?.installWindowDelegates(session)
+        app.extensions.attachSession(tab, session)
+        app.bridge.attach(session)
     }
 
     private fun selectWhenOpen(child: Tab, tries: Int) {

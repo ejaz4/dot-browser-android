@@ -78,7 +78,8 @@ import org.mozilla.geckoview.WebRequest
 import org.mozilla.geckoview.WebResponse
 import java.util.concurrent.Executors
 
-class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, ToolbarView.Listener {
+class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, ToolbarView.Listener,
+    co.dothq.browser.core.ExtensionManager.Ui {
 
     private val app get() = application as DotApp
     override val tabManager: TabManager get() = app.tabs
@@ -128,6 +129,9 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
             else -> navigate(url)
         }
     }
+    private val extensionsScreen = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        result.data?.getStringExtra(ExtensionsActivity.EXTRA_OPEN_URL)?.let { tabManager.newTab(it) }
+    }
     private val settings = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         applyLayout()
         selected()?.let { applyPalette(it, force = true); render(it) }
@@ -148,6 +152,8 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         buildUi()
         delegates = WindowDelegates(this)
         tabManager.attach(this)
+        app.extensions.ui = this
+        app.extensions.start()
 
         val handled = savedInstanceState == null && handleIntent(intent)
         if (!handled) {
@@ -260,6 +266,7 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
 
     override fun onStart() {
         super.onStart()
+        if (::gecko.isInitialized) app.extensions.ui = this
         selected()?.session?.setActive(true)
         ntp.setAnimating(true)
     }
@@ -274,6 +281,7 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
     override fun onDestroy() {
         if (::gecko.isInitialized) {
             tabManager.detach(this)
+            if (app.extensions.ui === this) app.extensions.ui = null
             gecko.releaseSession()
         }
         super.onDestroy()
@@ -537,6 +545,68 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         peek(previewUrl, link ?: src ?: return, title, tab, actions, openLabel = if (link == null && isImage) R.string.open_image else R.string.open_in_new_tab)
     }
 
+    /* ---- Extensions ------------------------------------------------------------------------- */
+
+    private fun installExtension(url: String) {
+        toast(getString(R.string.installing_extension))
+        app.extensions.install(url) { ext, error ->
+            when {
+                ext != null -> {
+                    Haptics.confirm(root)
+                    toast(getString(R.string.extension_added, ext.metaData.name ?: ext.id))
+                }
+                error != null -> toast(error)
+            }
+        }
+    }
+
+    override fun onInstallPrompt(ext: org.mozilla.geckoview.WebExtension, permissions: List<String>, origins: List<String>, done: (Boolean, Boolean) -> Unit) {
+        activeMenu?.dismiss(false)
+        ExtensionPrompts.install(this, root, palette(), ext, app.extensions.iconOf(ext), permissions, origins, sheet, done)
+    }
+
+    override fun onPermissionPrompt(ext: org.mozilla.geckoview.WebExtension, permissions: List<String>, origins: List<String>, done: (Boolean) -> Unit) {
+        ExtensionPrompts.permissions(this, palette(), ext, permissions, origins, sheet, done)
+    }
+
+    override fun onExtensionsChanged() = Unit
+
+    /** An extension's toolbar popup, in a sheet. */
+    override fun onPopup(ext: org.mozilla.geckoview.WebExtension, session: GeckoSession) {
+        val p = palette()
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16.dp, 0, 16.dp, 0)
+        }
+        box.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(6.dp, 0, 6.dp, 10.dp)
+            val icon = app.extensions.iconOf(ext)
+            if (icon != null) addView(ImageView(context).apply { setImageBitmap(icon) }, lp(20.dp, 20.dp).margins(r = 10.dp))
+            addView(label(ext.metaData.name ?: ext.id, 15f, p.text, bold = true))
+        })
+        val frame = FrameLayout(this).apply {
+            background = co.dothq.browser.ui.rounded(p.bg, 16f.dp, p.border, 1)
+            outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+            clipToOutline = true
+        }
+        val view = GeckoView(this).apply { setViewBackend(GeckoView.BACKEND_TEXTURE_VIEW) }
+        frame.addView(view, flp(MATCH, MATCH))
+        box.addView(frame, lp(MATCH, (resources.displayMetrics.heightPixels * 0.55f).toInt()))
+        view.setSession(session)
+        sheet.onDismiss = {
+            sheet.onDismiss = null
+            root.postDelayed({ view.releaseSession(); session.close() }, 260)
+        }
+        sheet.show(box)
+    }
+
+    override fun openTab(url: String) {
+        if (_sheet?.isShowing == true) _sheet?.dismiss()
+        tabManager.newTab(url)
+    }
+
     /* ---- Link peek -------------------------------------------------------------------------- */
 
     private var peekTab: Tab? = null
@@ -698,7 +768,13 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
     }
 
     override fun onDownload(tab: Tab, response: WebResponse) {
-        val (name, _) = Downloads.fileName(response)
+        val (name, mime) = Downloads.fileName(response)
+        if (mime == "application/x-xpinstall" || name.endsWith(".xpi", ignoreCase = true)) {
+            runCatching { response.body?.close() }
+            installExtension(response.uri)
+            if (tab.isHome && !tab.canGoBack && tab.parentId != null) tabManager.close(tab)
+            return
+        }
         toast(getString(R.string.download_started, name))
         Downloads.save(this, response) { saved ->
             if (saved == null) toast(getString(R.string.download_failed))
@@ -984,8 +1060,12 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
                     },
                     palette().shield,
                 ) { showSiteInfo(tab) }
+                val extActions = app.extensions.actionsFor(tab.session).map { a ->
+                    co.dothq.browser.ui.ActionChip(a.icon, a.title, a.badge, a.enabled, a.click)
+                }
                 val entries = listOfNotNull(
                     status,
+                    extActions.takeIf { it.isNotEmpty() }?.let { MenuEntry.Actions(it) },
                     MenuEntry.Nav(
                         listOf(
                             NavButton(R.drawable.ic_arrow_left, getString(R.string.back), tab.canGoBack) { tab.session?.goBack() },
@@ -1008,6 +1088,9 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
                     MenuEntry.Separator,
                     MenuEntry.Item(getString(R.string.bookmarks)) { openLibrary(LibraryActivity.PAGE_BOOKMARKS) },
                     MenuEntry.Item(getString(R.string.history)) { openLibrary(LibraryActivity.PAGE_HISTORY) },
+                    MenuEntry.Item(getString(R.string.extensions)) {
+                        extensionsScreen.launch(Intent(this, ExtensionsActivity::class.java))
+                    },
                     MenuEntry.Item(getString(R.string.downloads)) {
                         try { startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS)) } catch (_: Exception) {}
                     },

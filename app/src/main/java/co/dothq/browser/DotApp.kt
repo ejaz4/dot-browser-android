@@ -18,6 +18,8 @@ class DotApp : Application() {
     /** Created on first use only, so Gecko's child processes never try to start a runtime. */
     val runtime: GeckoRuntime by lazy { createRuntime() }
     val tabs: TabManager by lazy { TabManager(this) }
+    val extensions: co.dothq.browser.core.ExtensionManager by lazy { co.dothq.browser.core.ExtensionManager(this) }
+    val bridge: co.dothq.browser.ai.PageBridge by lazy { co.dothq.browser.ai.PageBridge(this) }
 
     override fun onCreate() {
         super.onCreate()

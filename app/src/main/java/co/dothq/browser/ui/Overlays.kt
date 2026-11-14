@@ -45,7 +45,11 @@ sealed class MenuEntry {
     /** A tinted status line with an icon (the privacy summary at the top of the menu). */
     data class Status(val icon: Int, val text: String, val tint: Int, val onClick: () -> Unit) : MenuEntry()
     data object Separator : MenuEntry()
+    /** A row of extension toolbar buttons (icon, short label, optional badge). */
+    data class Actions(val items: List<ActionChip>) : MenuEntry()
 }
+
+data class ActionChip(val icon: android.graphics.Bitmap?, val title: String, val badge: String?, val enabled: Boolean, val onClick: () -> Unit)
 
 data class NavButton(
     val icon: Int,
@@ -246,6 +250,46 @@ class DotMenu(private val host: FrameLayout, private val p: Palette) {
                 }
                 addView(btn)
             }
+        }
+
+        is MenuEntry.Actions -> android.widget.HorizontalScrollView(c).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            layoutParams = lp(MATCH, WRAP)
+            val row = LinearLayout(c).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(8.dp, 4.dp, 8.dp, 4.dp)
+            }
+            e.items.forEach { chip ->
+                val cell = LinearLayout(c).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    setPadding(4.dp, 6.dp, 4.dp, 6.dp)
+                    pressable(p, Radius.field)
+                    alpha = if (chip.enabled) 1f else 0.4f
+                    contentDescription = chip.title
+                    sinkOnPress(0.9f)
+                    setOnClickListener { Haptics.tap(it); dismiss(); chip.onClick() }
+                }
+                val iconFrame = FrameLayout(c)
+                val iv = ImageView(c).apply {
+                    if (chip.icon != null) setImageBitmap(chip.icon) else { setImageResource(R.drawable.ic_page); tint(p.icon) }
+                }
+                iconFrame.addView(iv, flp(24.dp, 24.dp, Gravity.CENTER))
+                if (!chip.badge.isNullOrBlank()) {
+                    iconFrame.addView(c.label(chip.badge.take(4), 9f, 0xFFFFFFFF.toInt(), bold = true).apply {
+                        background = rounded(p.accent, 8f.dp)
+                        setPadding(4.dp, 1.dp, 4.dp, 1.dp)
+                        gravity = Gravity.CENTER
+                    }, flp(WRAP, WRAP, Gravity.TOP or Gravity.END))
+                }
+                cell.addView(iconFrame, lp(40.dp, 32.dp))
+                cell.addView(c.label(chip.title, 11f, p.text2).apply {
+                    maxLines = 1; ellipsize = TextUtils.TruncateAt.END; gravity = Gravity.CENTER
+                }, lp(60.dp, WRAP).margins(t = 3.dp))
+                row.addView(cell, lp(WRAP, WRAP))
+            }
+            addView(row)
         }
 
         is MenuEntry.Status -> LinearLayout(c).apply {

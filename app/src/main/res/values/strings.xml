@@ -186,4 +186,25 @@
     <string name="welcome_point_private">Private tabs forget everything the moment you close them.</string>
     <string name="get_started">Get started</string>
     <string name="welcome_preview">Developer preview</string>
+    <!-- Extensions -->
+    <string name="extensions">Extensions</string>
+    <string name="extensions_body">Add features to Dot with Firefox extensions. They can only do what you allow.</string>
+    <string name="find_extensions">Find extensions</string>
+    <string name="extensions_installed">Installed</string>
+    <string name="no_extensions">No extensions yet</string>
+    <string name="no_extensions_body">Ad blockers, password managers, dark readers and more are a tap away.</string>
+    <string name="install_from_file">Install from a file…</string>
+    <string name="run_in_private">Run in private tabs</string>
+    <string name="run_in_private_body">The extension can see what you do in private tabs.</string>
+    <string name="extension_settings">Extension settings</string>
+    <string name="extension_listing">View on addons.mozilla.org</string>
+    <string name="remove_extension">Remove</string>
+    <string name="extension_removed">Removed %1$s</string>
+    <string name="extension_added">Added %1$s</string>
+    <string name="extension_install_failed">Couldn\'t install the extension</string>
+    <string name="add_extension_title">Add %1$s?</string>
+    <string name="extension_can">It will be able to:</string>
+    <string name="extension_wants_more">%1$s wants more permissions</string>
+    <string name="add">Add</string>
+    <string name="installing_extension">Installing extension…</string>
 </resources>
