@@ -30,6 +30,17 @@ android {
         buildConfig = true
     }
 
+    // GeckoView ships native code for every CPU type (~260 MB universal). Also build one APK
+    // per ABI so each phone only downloads what it can run; arm64-v8a covers modern phones.
+    splits {
+        abi {
+            enable = true
+            reset()
+            include 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+            universalApk = true
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled = true
