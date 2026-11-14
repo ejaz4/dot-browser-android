@@ -157,6 +157,7 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
         tabManager.attach(this)
         app.extensions.ui = this
         app.extensions.start()
+        app.assistant.addActivityListener(agentListener)
 
         val handled = savedInstanceState == null && handleIntent(intent)
         if (!handled) {
@@ -300,6 +301,7 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
     }
 
     override fun onDestroy() {
+        if (::gecko.isInitialized) app.assistant.removeActivityListener(agentListener)
         if (::gecko.isInitialized) {
             tabManager.detach(this)
             if (app.extensions.ui === this) app.extensions.ui = null
@@ -626,6 +628,105 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
             chatView.unbind()
             chatBound = null
         }
+        updateAgentIndicator()
+    }
+
+    /* ---- Dot Assistant: work carrying on in the background ---------------------------------- */
+
+    private var agentPill: co.dothq.browser.ui.AgentPill? = null
+    private var agentGlow: co.dothq.browser.ui.IntelligenceGlow? = null
+    /** The chat the pill is about: the one working, or the one that just finished. */
+    private var agentWatched: co.dothq.browser.ai.ChatSession? = null
+    private val agentListener: () -> Unit = { updateAgentIndicator() }
+    private val agentPillTimeout = Runnable { hideAgentPill() }
+
+    /**
+     * When Dot is working on something you can't see (you went back to the page, or another
+     * tab), a quiet glow wraps the page it's driving and a pill shows the current step. When
+     * the work finishes out of sight, the pill offers the answer for a few seconds.
+     */
+    private fun updateAgentIndicator() {
+        if (!::root.isInitialized) return
+        val tab = selected()
+        val busy = app.assistant.busySession
+        if (busy != null) {
+            root.removeCallbacks(agentPillTimeout)
+            agentWatched = busy
+            val here = busy.tab === tab
+            if (here && tab?.chat == true) {
+                // You're watching the chat itself; it has its own live strip.
+                hideAgentGlow()
+                hideAgentPill()
+                agentWatched = busy
+                return
+            }
+            val heading = if (here) "Dot is working on this page" else "Dot is working in another tab"
+            showAgentPill().working(heading, busy.stage ?: "Working")
+            if (here && !tab!!.isHome) showAgentGlow() else hideAgentGlow()
+            return
+        }
+        hideAgentGlow()
+        val last = agentWatched ?: return
+        val pill = agentPill
+        val looking = last.tab === tab && tab.chat
+        if (pill == null || looking || !last.finishedWithAnswer || last.tab !in tabManager.tabs) {
+            hideAgentPill()
+            if (looking || pill == null) agentWatched = null
+            return
+        }
+        if (!pill.done) {
+            val answer = (last.items.lastOrNull() as? co.dothq.browser.ai.ChatItem.Reply)?.text.orEmpty()
+            val preview = answer.replace(Regex("[*`#]"), "").lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
+            pill.finished("Dot has an answer", preview ?: "Tap to see it")
+            root.postDelayed(agentPillTimeout, 12_000)
+        }
+    }
+
+    private fun showAgentPill(): co.dothq.browser.ui.AgentPill {
+        agentPill?.let { return it }
+        val pill = co.dothq.browser.ui.AgentPill(this, palette(),
+            onOpen = { openAgentChat() },
+            onStop = { agentWatched?.stop() },
+        )
+        val bottom = if (app.prefs.toolbarAtBottom && toolbarSlot.visibility == View.VISIBLE) toolbarSlot.height else 0
+        val lp = flp(MATCH, WRAP, Gravity.BOTTOM).margins(l = 12.dp, r = 12.dp)
+        lp.bottomMargin = bottom + 10.dp
+        // Above the page (and its glow), below the tab overview, sheets and toasts.
+        root.addView(pill, root.indexOfChild(agentGlow ?: column) + 1, lp)
+        pill.enter()
+        agentPill = pill
+        return pill
+    }
+
+    private fun hideAgentPill() {
+        root.removeCallbacks(agentPillTimeout)
+        val pill = agentPill ?: return
+        agentPill = null
+        pill.leave()
+    }
+
+    private fun showAgentGlow() {
+        if (agentGlow != null || glow != null) return
+        val g = co.dothq.browser.ui.IntelligenceGlow(this).apply { strength = 0.5f }
+        root.addView(g, root.indexOfChild(column) + 1, flp(MATCH, MATCH))
+        agentGlow = g
+        g.begin()
+    }
+
+    private fun hideAgentGlow() {
+        val g = agentGlow ?: return
+        agentGlow = null
+        g.end { root.removeView(g) }
+    }
+
+    /** Back to the chat that's working (or just finished): it rises from where the pill was. */
+    private fun openAgentChat() {
+        val session = agentWatched ?: return
+        val tab = session.tab
+        hideAgentPill()
+        if (tab !in tabManager.tabs) { agentWatched = null; return }
+        if (selected() !== tab) tabManager.select(tab)
+        if (tab.chat) updateAgentIndicator() else setChat(tab, true)
     }
 
     override fun chatShowPage() {
@@ -678,6 +779,7 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
 
     private fun onShake() {
         if (!app.prefs.shakeToSummarise || summaryCard != null || switcher.isShowing) return
+        if (app.assistant.busySession != null) return
         val tab = selected() ?: return
         if (tab.isHome || tab.chat || !Urls.isWeb(tab.url)) return
         summarizeCurrent()
@@ -693,9 +795,14 @@ class BrowserActivity : AppCompatActivity(), TabUi, SwitcherHost, NewTabHost, To
             toast("Set up Dot Assistant to summarise pages", "Set up") { chatOpenSettings() }
             return
         }
+        if (app.assistant.busySession != null) {
+            toast("Dot is busy with a chat")
+            return
+        }
         activeMenu?.dismiss(false)
         Haptics.spin(root)
         val p = palette()
+        hideAgentGlow()
         val g = co.dothq.browser.ui.IntelligenceGlow(this)
         root.addView(g, flp(MATCH, MATCH))
         glow = g

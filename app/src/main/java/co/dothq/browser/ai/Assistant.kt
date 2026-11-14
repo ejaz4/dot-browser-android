@@ -42,6 +42,16 @@ class Assistant(private val app: DotApp) {
     }
 
     fun session(tab: Tab): ChatSession = sessions.getOrPut(tab.id) { ChatSession(this, app, tab) }
+
+    /** The chat that's working right now, if any (one model, so at most one at a time). */
+    val busySession: ChatSession? get() = sessions.values.firstOrNull { it.running }
+
+    private val activityListeners = mutableListOf<() -> Unit>()
+
+    /** Called (on the main thread) whenever any chat starts, progresses or stops. */
+    fun addActivityListener(l: () -> Unit) { activityListeners += l }
+    fun removeActivityListener(l: () -> Unit) { activityListeners -= l }
+    internal fun notifyActivity() = activityListeners.toList().forEach { it() }
     fun sessionOrNull(tab: Tab): ChatSession? = sessions[tab.id]
     fun dropSession(tab: Tab) { sessions.remove(tab.id)?.stop() }
 

@@ -52,7 +52,13 @@ class ChatSession(private val assistant: Assistant, private val app: DotApp, val
 
     fun addListener(l: () -> Unit) { listeners += l }
     fun removeListener(l: () -> Unit) { listeners -= l }
-    private fun changed() = main.post { listeners.toList().forEach { it() } }
+    private fun changed() = main.post {
+        listeners.toList().forEach { it() }
+        assistant.notifyActivity()
+    }
+
+    /** The last request ended in a reply (not an error, and not stopped part-way). */
+    val finishedWithAnswer get() = !running && !stopped && items.lastOrNull() is ChatItem.Reply
 
     fun send(text: String) {
         if (running || text.isBlank()) return

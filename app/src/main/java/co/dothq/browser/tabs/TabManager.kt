@@ -110,6 +110,8 @@ class TabManager(private val app: DotApp) {
         if (index < 0) return
         val wasSelected = tab === selected
         tabs.removeAt(index)
+        // Dot stops working on a page that's gone (the conversation stays, for undo).
+        app.assistant.sessionOrNull(tab)?.stop()
         // Close right away (stops media); undo restores from the saved session state.
         tab.session?.close()
         tab.session = null
@@ -141,6 +143,7 @@ class TabManager(private val app: DotApp) {
         val victims = tabs.filter { it.isPrivate == private }
         victims.forEach { t ->
             tabs.remove(t)
+            app.assistant.dropSession(t)
             t.session?.close()
             t.session = null
             File(app.cacheDir, "thumbs/${t.id}.jpg").delete()

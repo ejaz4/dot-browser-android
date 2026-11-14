@@ -64,6 +64,12 @@ class IntelligenceGlow(context: Context) : View(context) {
     private val born = SystemClock.uptimeMillis()
     var cornerRadius = 40f.dp
 
+    /**
+     * How bright the light is, 0–1. A summary gets the full glow; work Dot carries on with in
+     * the background gets a quieter one, so it can stay up for a minute without shouting.
+     */
+    var strength = 1f
+
     init {
         if (Build.VERSION.SDK_INT < 28) setLayerType(LAYER_TYPE_SOFTWARE, null)
         isClickable = false
@@ -134,7 +140,7 @@ class IntelligenceGlow(context: Context) : View(context) {
 
         // A soft wash of colour rising from the bottom edge as it arrives.
         if (reveal < 1f || working) {
-            val washA = (1f - reveal).coerceIn(0f, 1f) * 0.35f + if (working) 0.05f + 0.04f * sin(t * 2.2f) else 0f
+            val washA = ((1f - reveal).coerceIn(0f, 1f) * 0.35f + if (working) 0.05f + 0.04f * sin(t * 2.2f) else 0f) * strength
             wash.shader = RadialGradient(width / 2f, height.toFloat(), max(width, height) * 0.55f,
                 intArrayOf(withAlpha(colors[2], washA * intensity), withAlpha(colors[0], washA * 0.4f * intensity), 0), floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP)
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), wash)
@@ -146,7 +152,7 @@ class IntelligenceGlow(context: Context) : View(context) {
         measure.getSegment(length - half, length, seg, true)
         val breathe = if (working) 0.85f + 0.15f * sin(t * 2.6f) else 1f
         for ((paint, a) in layers) {
-            paint.alpha = (a * intensity * breathe * 255).toInt().coerceIn(0, 255)
+            paint.alpha = (a * intensity * breathe * strength * 255).toInt().coerceIn(0, 255)
             canvas.drawPath(seg, paint)
         }
         postInvalidateOnAnimation()
