@@ -2,17 +2,26 @@
 //
 // One Engine per loaded model. All calls for an engine come from a single Kotlin thread,
 // except stop(), which only flips an atomic flag.
+//
+// Two ways to generate:
+//  - nativeGenerate: a pre-rendered prompt in, plain text out (summaries, legacy agent).
+//  - nativeChat: OpenAI-style messages and tools in. The model's own chat template renders
+//    them, a grammar keeps tool calls well-formed, and its own format is parsed back into
+//    content and tool calls.
 
 #include <jni.h>
 #include <android/log.h>
 
 #include <atomic>
 #include <cstring>
+#include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
 #include "llama.h"
 #include "chat.h"
+#include "sampling.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
@@ -49,6 +58,15 @@ std::string jstring_to_string(JNIEnv * env, jstring s) {
     return out;
 }
 
+// Java strings arrive as modified UTF-8, which mangles emoji; take raw UTF-8 bytes instead.
+std::string jbytes_to_string(JNIEnv * env, jbyteArray b) {
+    if (!b) return {};
+    jsize n = env->GetArrayLength(b);
+    std::string out((size_t) n, '\0');
+    env->GetByteArrayRegion(b, 0, n, reinterpret_cast<jbyte *>(out.data()));
+    return out;
+}
+
 // Java's NewStringUTF wants modified UTF-8, which breaks emoji; hand bytes over instead.
 jbyteArray to_bytes(JNIEnv * env, const std::string & s) {
     jbyteArray arr = env->NewByteArray((jsize) s.size());
@@ -69,21 +87,35 @@ size_t valid_utf8_prefix(const std::string & s) {
     return last_ok;
 }
 
-std::string token_to_piece(const llama_vocab * vocab, llama_token t) {
+std::string token_to_piece(const llama_vocab * vocab, llama_token t, bool special) {
     char buf[256];
-    int n = llama_token_to_piece(vocab, t, buf, sizeof(buf), 0, false);
+    int n = llama_token_to_piece(vocab, t, buf, sizeof(buf), 0, special);
     if (n < 0) {
         std::string big(-n, '\0');
-        n = llama_token_to_piece(vocab, t, big.data(), (int32_t) big.size(), 0, false);
+        n = llama_token_to_piece(vocab, t, big.data(), (int32_t) big.size(), 0, special);
         return big.substr(0, std::max(0, n));
     }
     return std::string(buf, n);
 }
 
-std::vector<llama_token> tokenize(const llama_vocab * vocab, const std::string & text) {
-    int n = -llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), nullptr, 0, true, true);
+std::vector<llama_token> tokenize(const llama_vocab * vocab, const std::string & text, bool add_special, bool parse_special) {
+    int n = -llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), nullptr, 0, add_special, parse_special);
     std::vector<llama_token> out(std::max(0, n));
-    if (n > 0) llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), out.data(), n, true, true);
+    if (n > 0) llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), out.data(), n, add_special, parse_special);
+    return out;
+}
+
+// Template text may contain control tokens; text that came from users or web pages may not.
+// Tokenizing those parts without special-token parsing means a page can't forge a turn.
+std::vector<llama_token> tokenize_prompt(const llama_vocab * vocab, const common_chat_prompt & prompt) {
+    std::vector<llama_token> out;
+    bool first = true;
+    for (const auto & part : prompt.parts) {
+        if (part.text.empty()) continue;
+        auto t = tokenize(vocab, part.text, first, !part.is_input);
+        out.insert(out.end(), t.begin(), t.end());
+        first = false;
+    }
     return out;
 }
 
@@ -91,6 +123,147 @@ void clear_cache(Engine * e) {
     llama_memory_clear(llama_get_memory(e->ctx), true);
     e->cached.clear();
     e->n_past = 0;
+}
+
+common_params_sampling base_sampling(float temperature) {
+    common_params_sampling sp;
+    sp.temp = temperature <= 0.01f ? 0.0f : temperature;
+    sp.top_k = 40;
+    sp.top_p = 0.92f;
+    sp.min_p = 0.05f;
+    sp.penalty_last_n = 64;
+    sp.penalty_repeat = 1.08f;
+    sp.no_perf = true;
+    return sp;
+}
+
+/*
+ * Puts the prompt in the KV cache: text reuses whatever prefix is already cached; an image goes
+ * through mtmd (placed where the media marker appears in [text]). Returns 0 or a negative error.
+ */
+int eval_prompt(JNIEnv * env, Engine * e, const std::vector<llama_token> & tokens, const std::string & text,
+                jintArray jpixels, jint width, jint height, int max_tokens, jobject callback, jmethodID onProgress,
+                bool & with_image) {
+    const int n_ctx = (int) llama_n_ctx(e->ctx);
+    with_image = jpixels && e->vision;
+    if (with_image) {
+        clear_cache(e);
+        jsize count = env->GetArrayLength(jpixels);
+        std::vector<jint> argb(count);
+        env->GetIntArrayRegion(jpixels, 0, count, argb.data());
+        std::vector<unsigned char> rgb((size_t) width * height * 3);
+        for (size_t i = 0; i < (size_t) width * height; i++) {
+            uint32_t p = (uint32_t) argb[i];
+            rgb[i * 3] = (p >> 16) & 0xFF;
+            rgb[i * 3 + 1] = (p >> 8) & 0xFF;
+            rgb[i * 3 + 2] = p & 0xFF;
+        }
+        mtmd_bitmap * bitmap = mtmd_bitmap_init((uint32_t) width, (uint32_t) height, rgb.data());
+        mtmd_input_chunks * chunks = mtmd_input_chunks_init();
+        mtmd_input_text in{text.c_str(), text.size(), true, true};
+        const mtmd_bitmap * bitmaps[] = {bitmap};
+        int32_t res = mtmd_tokenize(e->vision, chunks, &in, bitmaps, 1);
+        mtmd_bitmap_free(bitmap);
+        if (res != 0) {
+            mtmd_input_chunks_free(chunks);
+            LOGE("mtmd_tokenize failed: %d", res);
+            return -3;
+        }
+        if ((int) mtmd_helper_get_n_pos(chunks) + max_tokens >= n_ctx) {
+            mtmd_input_chunks_free(chunks);
+            return -2;
+        }
+        if (onProgress) env->CallVoidMethod(callback, onProgress, 0.1f);
+        llama_pos new_past = 0;
+        res = mtmd_helper_eval_chunks(e->vision, e->ctx, chunks, 0, 0, e->n_batch, true, &new_past);
+        mtmd_input_chunks_free(chunks);
+        if (res != 0) {
+            clear_cache(e);
+            return -4;
+        }
+        e->n_past = new_past;
+        e->cached.clear();  // positions don't map to plain tokens; next call starts fresh
+        return 0;
+    }
+
+    if ((int) tokens.size() + max_tokens >= n_ctx) return -2;
+    size_t common = 0;
+    while (common < e->cached.size() && common < tokens.size() && e->cached[common] == tokens[common]) common++;
+    if (common == tokens.size() && common > 0) common--;  // always re-decode the last token for fresh logits
+    if (common < e->cached.size()) {
+        // Hybrid / recurrent models can't drop a partial sequence: start over.
+        if (!llama_memory_seq_rm(llama_get_memory(e->ctx), 0, (llama_pos) common, -1)) {
+            clear_cache(e);
+            common = 0;
+        }
+    }
+    e->cached.resize(common);
+    e->n_past = (llama_pos) common;
+    size_t total = tokens.size() - common;
+    for (size_t i = common; i < tokens.size(); i += e->n_batch) {
+        if (e->stop.load()) { clear_cache(e); return 1; }
+        int32_t n = (int32_t) std::min<size_t>(e->n_batch, tokens.size() - i);
+        llama_batch batch = llama_batch_get_one(const_cast<llama_token *>(tokens.data()) + i, n);
+        if (llama_decode(e->ctx, batch) != 0) {
+            clear_cache(e);
+            return -4;
+        }
+        e->n_past += n;
+        e->cached.insert(e->cached.end(), tokens.begin() + i, tokens.begin() + i + n);
+        if (onProgress && total > 0) env->CallVoidMethod(callback, onProgress, (float) (i + n - common) / (float) total);
+    }
+    return 0;
+}
+
+/*
+ * Samples up to [max_tokens], handing each piece to [on_piece] (return false to stop). Pieces of
+ * [special_ok] tokens (a tool-call tag, say) are rendered as text so the parser can see them.
+ */
+int sample_loop(Engine * e, common_sampler * smpl, int max_tokens, bool with_image,
+                const std::set<llama_token> & special_ok, const std::vector<std::string> & stops,
+                const std::function<bool(const std::string &, llama_token)> & on_piece) {
+    const int n_ctx = (int) llama_n_ctx(e->ctx);
+    std::string tail;  // recent text, for stop strings
+    int generated = 0;
+    for (; generated < max_tokens; generated++) {
+        if (e->stop.load()) break;
+        if (e->n_past + 1 >= n_ctx) break;
+        llama_token tok = common_sampler_sample(smpl, e->ctx, -1);
+        if (llama_vocab_is_eog(e->vocab, tok)) break;
+        common_sampler_accept(smpl, tok, true);
+
+        std::string piece = token_to_piece(e->vocab, tok, special_ok.count(tok) > 0);
+        tail += piece;
+        if (tail.size() > 64) tail.erase(0, tail.size() - 64);
+        bool hit_stop = false;
+        for (auto & s : stops) {
+            if (!s.empty() && tail.find(s) != std::string::npos) { hit_stop = true; break; }
+        }
+
+        llama_batch batch = llama_batch_get_one(&tok, 1);
+        if (llama_decode(e->ctx, batch) != 0) break;
+        e->n_past += 1;
+        if (!with_image) e->cached.push_back(tok);
+
+        if (hit_stop) break;
+        if (!on_piece(piece, tok)) { generated++; break; }
+    }
+    return generated;
+}
+
+common_chat_templates_inputs chat_inputs(const std::string & messages, const std::string & tools, int tool_choice) {
+    common_chat_templates_inputs in;
+    in.messages = common_chat_msgs_parse_oaicompat(common_json::parse(messages));
+    if (!tools.empty()) in.tools = common_chat_tools_parse_oaicompat(common_json::parse(tools));
+    in.tool_choice = tool_choice == 1 ? COMMON_CHAT_TOOL_CHOICE_REQUIRED
+                   : tool_choice == 2 ? COMMON_CHAT_TOOL_CHOICE_NONE
+                   : COMMON_CHAT_TOOL_CHOICE_AUTO;
+    in.parallel_tool_calls = false;
+    in.add_generation_prompt = true;
+    in.use_jinja = true;
+    in.enable_thinking = false;
+    in.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    return in;
 }
 
 }  // namespace
@@ -226,6 +399,30 @@ Java_co_dothq_browser_ai_Llama_nativeFormat(JNIEnv * env, jclass, jlong handle,
     return env->NewStringUTF(prompt.c_str());
 }
 
+/*
+ * The tool-call format this model's template uses, e.g. "peg-native", or "" when the template
+ * can't describe tools to the model (then the caller falls back to prompting for them).
+ */
+JNIEXPORT jstring JNICALL
+Java_co_dothq_browser_ai_Llama_nativeToolFormat(JNIEnv * env, jclass, jlong handle) {
+    auto * e = reinterpret_cast<Engine *>(handle);
+    if (!e) return env->NewStringUTF("");
+    try {
+        auto in = chat_inputs(
+            R"([{"role":"user","content":"What's the weather?"}])",
+            R"([{"type":"function","function":{"name":"search","description":"Search the web.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}}])",
+            0);
+        auto params = common_chat_templates_apply(e->templates.get(), in);
+        if (params.format == COMMON_CHAT_FORMAT_CONTENT_ONLY) return env->NewStringUTF("");
+        // A template that ignores tools won't mention the tool we passed.
+        if (params.prompt.str().find("search") == std::string::npos) return env->NewStringUTF("");
+        return env->NewStringUTF(common_chat_format_name(params.format));
+    } catch (const std::exception & ex) {
+        LOGW("Template can't do native tool calls: %s", ex.what());
+        return env->NewStringUTF("");
+    }
+}
+
 JNIEXPORT void JNICALL
 Java_co_dothq_browser_ai_Llama_nativeStop(JNIEnv *, jclass, jlong handle) {
     auto * e = reinterpret_cast<Engine *>(handle);
@@ -245,136 +442,141 @@ Java_co_dothq_browser_ai_Llama_nativeGenerate(JNIEnv * env, jclass, jlong handle
     if (!e) return -1;
     e->stop.store(false);
     std::string prompt = jstring_to_string(env, jprompt);
-    const int n_ctx = (int) llama_n_ctx(e->ctx);
 
     jclass cbClass = env->GetObjectClass(callback);
     jmethodID onToken = env->GetMethodID(cbClass, "onToken", "([B)Z");
     jmethodID onProgress = env->GetMethodID(cbClass, "onPromptProgress", "(F)V");
 
-    const bool with_image = jpixels && e->vision;
-    if (with_image) {
-        // ---- Image + text: evaluate through mtmd (no cache reuse) ----
-        clear_cache(e);
-        jsize count = env->GetArrayLength(jpixels);
-        std::vector<jint> argb(count);
-        env->GetIntArrayRegion(jpixels, 0, count, argb.data());
-        std::vector<unsigned char> rgb((size_t) width * height * 3);
-        for (size_t i = 0; i < (size_t) width * height; i++) {
-            uint32_t p = (uint32_t) argb[i];
-            rgb[i * 3] = (p >> 16) & 0xFF;
-            rgb[i * 3 + 1] = (p >> 8) & 0xFF;
-            rgb[i * 3 + 2] = p & 0xFF;
-        }
-        mtmd_bitmap * bitmap = mtmd_bitmap_init((uint32_t) width, (uint32_t) height, rgb.data());
-        mtmd_input_chunks * chunks = mtmd_input_chunks_init();
-        mtmd_input_text text{prompt.c_str(), prompt.size(), true, true};
-        const mtmd_bitmap * bitmaps[] = {bitmap};
-        int32_t res = mtmd_tokenize(e->vision, chunks, &text, bitmaps, 1);
-        mtmd_bitmap_free(bitmap);
-        if (res != 0) {
-            mtmd_input_chunks_free(chunks);
-            LOGE("mtmd_tokenize failed: %d", res);
-            return -3;
-        }
-        if ((int) mtmd_helper_get_n_pos(chunks) + max_tokens >= n_ctx) {
-            mtmd_input_chunks_free(chunks);
-            return -2;
-        }
-        if (onProgress) env->CallVoidMethod(callback, onProgress, 0.1f);
-        llama_pos new_past = 0;
-        res = mtmd_helper_eval_chunks(e->vision, e->ctx, chunks, 0, 0, e->n_batch, true, &new_past);
-        mtmd_input_chunks_free(chunks);
-        if (res != 0) {
-            clear_cache(e);
-            return -4;
-        }
-        e->n_past = new_past;
-        e->cached.clear();  // positions don't map to plain tokens; next call starts fresh
-    } else {
-        // ---- Text only: reuse whatever prefix is already in the cache ----
-        std::vector<llama_token> tokens = tokenize(e->vocab, prompt);
-        if ((int) tokens.size() + max_tokens >= n_ctx) return -2;
-        size_t common = 0;
-        while (common < e->cached.size() && common < tokens.size() && e->cached[common] == tokens[common]) common++;
-        if (common == tokens.size() && common > 0) common--;  // always re-decode the last token for fresh logits
-        if (common < e->cached.size()) {
-            // Hybrid / recurrent models can't drop a partial sequence: start over.
-            if (!llama_memory_seq_rm(llama_get_memory(e->ctx), 0, (llama_pos) common, -1)) {
-                clear_cache(e);
-                common = 0;
-            }
-        }
-        e->cached.resize(common);
-        e->n_past = (llama_pos) common;
-        size_t total = tokens.size() - common;
-        for (size_t i = common; i < tokens.size(); i += e->n_batch) {
-            if (e->stop.load()) { clear_cache(e); return 0; }
-            int32_t n = (int32_t) std::min<size_t>(e->n_batch, tokens.size() - i);
-            llama_batch batch = llama_batch_get_one(tokens.data() + i, n);
-            if (llama_decode(e->ctx, batch) != 0) {
-                clear_cache(e);
-                return -4;
-            }
-            e->n_past += n;
-            e->cached.insert(e->cached.end(), tokens.begin() + i, tokens.begin() + i + n);
-            if (onProgress && total > 0) env->CallVoidMethod(callback, onProgress, (float) (i + n - common) / (float) total);
-        }
-    }
+    bool with_image = false;
+    std::vector<llama_token> tokens;
+    if (!(jpixels && e->vision)) tokens = tokenize(e->vocab, prompt, true, true);
+    int res = eval_prompt(env, e, tokens, prompt, jpixels, width, height, max_tokens, callback, onProgress, with_image);
+    if (res < 0) return res;
+    if (res > 0) return 0;  // stopped
 
-    // ---- Sampling ----
-    llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(llama_vocab_n_tokens(e->vocab), 64, 1.08f, 0.0f, 0.0f));
-    if (temperature <= 0.01f) {
-        llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
-    } else {
-        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
-        llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.92f, 1));
-        llama_sampler_chain_add(smpl, llama_sampler_init_min_p(0.05f, 1));
-        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature));
-        llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
-    }
+    auto sp = base_sampling(temperature);
+    common_sampler * smpl = common_sampler_init(e->model, sp);
+    if (!smpl) return -4;
 
-    std::string pending;   // bytes not yet sent (incomplete UTF-8)
-    std::string tail;      // recent text, for stop strings
-    int generated = 0;
-    for (; generated < max_tokens; generated++) {
-        if (e->stop.load()) break;
-        if (e->n_past + 1 >= n_ctx) break;
-        llama_token tok = llama_sampler_sample(smpl, e->ctx, -1);
-        if (llama_vocab_is_eog(e->vocab, tok)) break;
-        llama_sampler_accept(smpl, tok);
-
-        std::string piece = token_to_piece(e->vocab, tok);
-        pending += piece;
-        tail += piece;
-        if (tail.size() > 64) tail.erase(0, tail.size() - 64);
-
-        bool hit_stop = false;
-        for (auto & s : e->stops) {
-            if (!s.empty() && tail.find(s) != std::string::npos) { hit_stop = true; break; }
-        }
-
-        llama_batch batch = llama_batch_get_one(&tok, 1);
-        if (llama_decode(e->ctx, batch) != 0) break;
-        e->n_past += 1;
-        if (!with_image) e->cached.push_back(tok);
-
-        if (hit_stop) break;
-        size_t ok = valid_utf8_prefix(pending);
-        if (ok > 0) {
+    std::string pending;  // bytes not yet sent (incomplete UTF-8)
+    int generated = sample_loop(e, smpl, max_tokens, with_image, {}, e->stops,
+        [&](const std::string & piece, llama_token) {
+            pending += piece;
+            size_t ok = valid_utf8_prefix(pending);
+            if (ok == 0) return true;
             jbyteArray bytes = to_bytes(env, pending.substr(0, ok));
             jboolean keep = env->CallBooleanMethod(callback, onToken, bytes);
             env->DeleteLocalRef(bytes);
             pending.erase(0, ok);
-            if (!keep) break;
-        }
-    }
+            return (bool) keep;
+        });
     if (!pending.empty()) {
         jbyteArray bytes = to_bytes(env, pending);
         env->CallBooleanMethod(callback, onToken, bytes);
         env->DeleteLocalRef(bytes);
     }
-    llama_sampler_free(smpl);
+    common_sampler_free(smpl);
+    return generated;
+}
+
+/*
+ * A chat turn with native tool calling. [messages] and [tools] are OpenAI-style JSON (UTF-8).
+ * tool_choice: 0 auto, 1 required, 2 none. While it runs, callback.onContent(byte[]) gets the
+ * reply text so far (tool-call syntax already removed); at the end callback.onMessage(byte[])
+ * gets {"format", "message": {content, tool_calls…}, "raw"}. Returns tokens generated, or a
+ * negative error (-5: this template can't do tool calls).
+ */
+JNIEXPORT jint JNICALL
+Java_co_dothq_browser_ai_Llama_nativeChat(JNIEnv * env, jclass, jlong handle, jbyteArray jmessages,
+                                          jbyteArray jtools, jint tool_choice, jintArray jpixels,
+                                          jint width, jint height, jint max_tokens, jfloat temperature,
+                                          jobject callback) {
+    auto * e = reinterpret_cast<Engine *>(handle);
+    if (!e) return -1;
+    e->stop.store(false);
+
+    jclass cbClass = env->GetObjectClass(callback);
+    jmethodID onContent = env->GetMethodID(cbClass, "onContent", "([B)Z");
+    jmethodID onProgress = env->GetMethodID(cbClass, "onPromptProgress", "(F)V");
+    jmethodID onMessage = env->GetMethodID(cbClass, "onMessage", "([B)V");
+
+    common_chat_session session;
+    try {
+        auto in = chat_inputs(jbytes_to_string(env, jmessages), jbytes_to_string(env, jtools), tool_choice);
+        session = common_chat_session(e->templates.get(), e->vocab, in);
+    } catch (const std::exception & ex) {
+        LOGW("Native tool calling unavailable: %s", ex.what());
+        return -5;
+    }
+
+    bool with_image = false;
+    std::vector<llama_token> tokens;
+    std::string text;
+    if (jpixels && e->vision) text = session.prompt().str();
+    else tokens = tokenize_prompt(e->vocab, session.prompt());
+    int res = eval_prompt(env, e, tokens, text, jpixels, width, height, max_tokens, callback, onProgress, with_image);
+    if (res < 0) return res;
+    if (res > 0) return 0;  // stopped
+
+    auto sp = base_sampling(temperature);
+    session.apply_sampling(sp);
+    common_sampler * smpl = nullptr;
+    try {
+        smpl = common_sampler_init(e->model, sp);
+    } catch (const std::exception & ex) {
+        LOGW("Tool-call grammar rejected (%s); sampling without it", ex.what());
+    }
+    if (!smpl) {
+        sp.grammar = {};
+        sp.grammar_triggers.clear();
+        smpl = common_sampler_init(e->model, sp);
+    }
+    if (!smpl) return -4;
+
+    std::string raw;
+    std::string sent;
+    int generated = sample_loop(e, smpl, max_tokens, with_image, sp.preserved_tokens, session.additional_stops(),
+        [&](const std::string & piece, llama_token tok) {
+            raw += piece;
+            common_chat_input chunk;
+            chunk.append(piece, tok);
+            std::string content;
+            try {
+                content = session.feed(chunk).content;
+            } catch (const std::exception &) {
+                return true;  // a half-written tool call can fail to parse; keep going
+            }
+            content.resize(valid_utf8_prefix(content));
+            if (content == sent) return true;
+            sent = content;
+            jbyteArray bytes = to_bytes(env, content);
+            jboolean keep = env->CallBooleanMethod(callback, onContent, bytes);
+            env->DeleteLocalRef(bytes);
+            return (bool) keep;
+        });
+    common_sampler_free(smpl);
+
+    common_json out = common_json::object();
+    out["format"] = std::string(common_chat_format_name(session.format()));
+    out["raw"] = raw;
+    try {
+        out["message"] = session.finish().to_json_oaicompat();
+    } catch (const std::exception & ex) {
+        LOGW("Couldn't parse the reply (%s)", ex.what());
+        common_chat_msg m;
+        m.role = "assistant";
+        m.content = raw;
+        out["message"] = m.to_json_oaicompat();
+    }
+    std::string json;
+    try {
+        json = out.dump_safe();
+    } catch (...) {
+        json = R"({"format":"","raw":"","message":{"role":"assistant","content":""}})";
+    }
+    jbyteArray bytes = to_bytes(env, json);
+    env->CallVoidMethod(callback, onMessage, bytes);
+    env->DeleteLocalRef(bytes);
     return generated;
 }
 
